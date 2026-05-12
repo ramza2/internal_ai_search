@@ -49,11 +49,14 @@ def complete_scan_job(
     completed_files: int,
     failed_files: int,
     skipped_files: int,
+    deleted_files: int = 0,
     error_message: str | None = None,
 ) -> None:
     """Mark the row COMPLETED with counters. Optional ``error_message``
     is stored for partial-success runs (some folders failed but persistence
-    proceeded). No-op when ``job_id`` is ``None``."""
+    proceeded). ``deleted_files`` carries the number of rows soft-marked
+    ``DELETED`` during deleted-detection (``0`` when detection was skipped).
+    No-op when ``job_id`` is ``None``."""
     if job_id is None:
         return
     err_clean: str | None = None
@@ -70,6 +73,7 @@ def complete_scan_job(
             completed_files = %s,
             failed_files = %s,
             skipped_files = %s,
+            deleted_files = %s,
             error_message = %s,
             current_file_path = NULL,
             updated_at = NOW()
@@ -86,6 +90,7 @@ def complete_scan_job(
                         int(completed_files),
                         int(failed_files),
                         int(skipped_files),
+                        int(deleted_files),
                         err_clean,
                         job_id,
                     ),

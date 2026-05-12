@@ -12,6 +12,7 @@ This backend follows a phased roadmap. Implemented so far:
 - **Step 8:** WebDAV root sync — upsert Depth:1 children into `files` (`POST /api/data-sources/{id}/sync-root`, no recursion / downloads / deletion detection)
 - **Step 9:** File statistics — read-only aggregation over `files` (`GET /api/files/stats`, `GET /api/data-sources/{id}/file-stats`, SQL-side grouping only)
 - **Step 10:** WebDAV recursive sync — bounded BFS over PROPFIND Depth:1 (`POST /api/data-sources/{id}/sync-tree`), upserts every visited item into `files` with `exclusion_policies` applied. No downloads / hashing / deletion detection.
+- **Step 11:** Deletion detection (soft-mark) for `sync-tree` (`detect_deleted=true`) — rows missing from a complete, unfiltered walk are flipped to `analysis_status='DELETED'` inside the same transaction. No physical row deletion, no `document_chunks` touches.
 
 ## Project structure
 
@@ -51,6 +52,7 @@ backend/
 │  │  ├─ file_recursive_sync_service.py
 │  │  ├─ file_stats_service.py
 │  │  ├─ file_sync_service.py
+│  │  ├─ files_deletion_service.py
 │  │  ├─ files_upsert.py
 │  │  └─ scan_jobs_service.py
 │  ├─ utils/
@@ -436,7 +438,7 @@ Bounded **BFS** over **`PROPFIND`** with **`Depth: 1`** per folder. Walks the tr
   - Fatal failure on the *start folder* (auth, 404, connection error, …) → `last_connection_*` only; **`last_scan_at` is not bumped**.
 - **`scan_jobs`** (best-effort): `MANUAL_SCAN` row created as `RUNNING`; finalized with `total_files = total_remote_items`, `processed_files = inserted + updated`, `completed_files = processed_files`, `failed_files = failed_count`, `skipped_files = excluded + directories`. Partial successes still finalize as **`COMPLETED`** but carry a short `error_message` summary of failed folders.
 - **Response shape** — counters include `visited_directories`, `total_remote_items`, `processed_items`, `inserted_count`, `updated_count`, `directories_count`, `files_count`, `excluded_count`, `failed_count`, `truncated`. Partial runs add `failed_paths[]` (capped at 20). `warnings[]` is also capped at 20.
-- **Out of scope:** deletion detection (rows missing from the walk are **not** marked `DELETED`), file downloads, content hashing / `content_hash`, mime sniffing beyond the server-provided `getcontenttype`, chunking, embeddings, and `document_chunks` writes.
+- **Out of scope (Step 10):** file downloads, content hashing / `content_hash`, mime sniffing beyond the server-provided `getcontenttype`, chunking, embeddings, and `document_chunks` writes. Deletion detection is added in **Step 11** below as an opt-in extension of this endpoint.
 - **Operational note:** this endpoint runs synchronously inside the HTTP request, with `max_depth` / `max_items` for safety. The current shape is **intentionally minimal**; in production the recursive walk is expected to move to a worker queue (separate process) so that long traversals do not hold an HTTP connection.
 
 ```bash
@@ -447,7 +449,47 @@ curl -X POST "http://localhost:8000/api/data-sources/{id}/sync-tree?start_path=/
 curl -X POST "http://localhost:8000/api/data-sources/{id}/sync-tree?start_path=/project-a&max_depth=5&max_items=10000&include_hidden=true&apply_exclusions=false"
 ```
 
+### Deleted-file detection (`detect_deleted=true`, Step 11)
+
+`sync-tree` accepts an opt-in **`detect_deleted`** query parameter (default **`false`**). When enabled, rows in `files` that fall inside the current `start_path` scope but were **not** observed during this walk are flipped to a **soft** `analysis_status = 'DELETED'`. The on-disk row is **never physically deleted** — this prevents stale documents from showing up in future searches without losing the historical record.
+
+- **Default is `false`** on purpose: turning detection on without operator intent could mass-mark thousands of rows after a misconfigured run. With `detect_deleted=false` a single warning is returned:
+  - `"Deleted detection is disabled. Existing files not found in this sync were not marked as DELETED."`
+- **All of the following must hold** for detection to actually execute (any failure → detection skipped, `deleted_marked_count = 0`, an explanatory warning is appended):
+  - `detect_deleted=true`
+  - `truncated=false` — a `max_items`-truncated walk cannot conclude that the unseen tail is gone.
+  - `failed_count=0` — folders that errored may legitimately still contain the missing rows.
+  - `apply_exclusions=false` — exclusion rules can hide a file in this run that was visible in the previous one; treating it as deleted would corrupt the index.
+  - `include_hidden=true` — hidden names dropped by the walk are not deletion candidates.
+  - WebDAV BFS itself succeeded (no fatal start-folder error).
+- **Skip warnings** are aggregated, so multiple reasons can be reported at once:
+  - `"Deleted detection was skipped because sync result was truncated."`
+  - `"Deleted detection was skipped because some directories failed to sync."`
+  - `"Deleted detection was skipped because exclusion policies were applied. Run with apply_exclusions=false for deleted detection."`
+  - `"Deleted detection was skipped because hidden items were excluded."`
+- **Scope filter** — `start_path` is normalized (always leading `/`, no trailing `/` except root):
+  - `start_path=/` → entire `data_source_id` is the deletion candidate set.
+  - `start_path=/project-a` → `remote_path = '/project-a'` **or** `remote_path LIKE '/project-a/%' ESCAPE '!'`. `%`, `_`, and `!` in the path are escaped before the `LIKE` so a folder literally named `100%docs` does the right thing. `!` is the escape character (instead of the conventional `\\`) to avoid PostgreSQL's `standard_conforming_strings` quoting quirks.
+- **Detection SQL** runs inside the **same transaction** as the upsert batch:
+  - `CREATE TEMP TABLE tmp_collected_paths(remote_path TEXT PRIMARY KEY) ON COMMIT DROP`
+  - Bulk-load this run's `remote_path`s via `COPY ... FROM STDIN`.
+  - `UPDATE files SET analysis_status='DELETED'::analysis_status, analysis_error_code=NULL, analysis_error_message='File not found in latest WebDAV sync', updated_at=NOW() WHERE data_source_id=%s AND analysis_status<>'DELETED' AND <scope> AND NOT EXISTS (SELECT 1 FROM tmp_collected_paths t WHERE t.remote_path = files.remote_path)`
+  - `last_indexed_at` is **left untouched** (analysis state is moving, not analysis history).
+- **Transaction policy** — upserts + deletion mark + `data_sources.last_scan_at` finalization commit together. If the deletion UPDATE fails, the **entire batch is rolled back**, `scan_jobs` is marked `FAILED` with `error_message='Failed to mark deleted files'`, and `last_scan_at` is **not** bumped. The HTTP response body uses the same message and includes the original DB error string.
+- **`scan_jobs` integration** — `scan_jobs.deleted_files` carries `deleted_marked_count` on success (0 when detection is skipped or disabled). The history row stays `COMPLETED` for partial-but-successful runs; only deletion-marking failures turn it `FAILED`.
+- **Stats integration** — `GET /api/files/stats` and `GET /api/data-sources/{id}/file-stats` already honor the `include_deleted` query (default `false`); rows soft-marked here only appear when the caller passes `include_deleted=true`. The `by_analysis_status` slice surfaces a `DELETED` bucket in that mode.
+- **`document_chunks` policy (future):** when later steps start writing `document_chunks`, every row associated with a `DELETED` file **must** be deactivated or removed and the **RAG search path must filter out `DELETED` files** before retrieval. This milestone deliberately writes nothing to `document_chunks`.
+
+```bash
+# Detection enabled and gates satisfied (no exclusions, hidden included)
+curl -X POST "http://localhost:8000/api/data-sources/{id}/sync-tree?start_path=/&max_depth=3&max_items=5000&include_hidden=true&apply_exclusions=false&detect_deleted=true"
+
+# Detection requested but exclusions are still on → response carries
+# deleted_marked_count=0 and an apply_exclusions skip-warning
+curl -X POST "http://localhost:8000/api/data-sources/{id}/sync-tree?start_path=/project-a&max_depth=4&max_items=10000&include_hidden=true&apply_exclusions=true&detect_deleted=true"
+```
+
 ## Notes
 
-- Steps 1–10 wire health checks, pgvector smoke tests, credential-safe data-source CRUD, a **minimal** DAV probe, **one-level** WebDAV previews and sync, a read-only **file statistics** endpoint, and a **bounded recursive** WebDAV sync (BFS, Depth:1 per folder, `max_depth` / `max_items`) with **`exclusion_policies`** applied — still **no** file downloads, content hashing, chunking, embeddings, deletion detection, authenticated UI, RBAC, or RAG/search.
+- Steps 1–11 wire health checks, pgvector smoke tests, credential-safe data-source CRUD, a **minimal** DAV probe, **one-level** WebDAV previews and sync, a read-only **file statistics** endpoint, a **bounded recursive** WebDAV sync (BFS, Depth:1 per folder, `max_depth` / `max_items`) with **`exclusion_policies`** applied, and **opt-in soft-mark deletion detection** for that recursive sync — still **no** file downloads, content hashing, chunking, embeddings, `document_chunks` writes, authenticated UI, RBAC, or RAG/search.
 - Structure is kept small for later ingestion, delta sync, scheduling, Docker Compose packaging, React admin screens, and search APIs.

@@ -18,9 +18,14 @@ or ``data_sources.last_connection_message``. Failure summaries are
 intentionally short HTTP-status-style strings.
 
 This stage does **not** download file bodies, hash content, chunk, embed,
-or write ``document_chunks`` — those move to subsequent steps. It also
-does not detect deletions: rows missing from the current traversal are
-left untouched.
+or write ``document_chunks`` — those move to subsequent steps.
+
+Step 11 adds **opt-in deleted detection** (``detect_deleted=true``): when
+all safety conditions hold (non-truncated, no failed folders, exclusions
+disabled, hidden items included), rows whose ``remote_path`` falls inside
+the current scope but were not seen in this walk are soft-marked
+``analysis_status = 'DELETED'``. The deletion UPDATE runs inside the same
+transaction as the upserts; any failure rolls back the entire batch.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ from app.schemas.data_source import WEBDAV_KINDS, SourceType
 from app.services import data_source_service as datasource_svc
 from app.services import scan_jobs_service
 from app.services.exclusion_policy_service import load_exclusion_filter
+from app.services.files_deletion_service import mark_deleted_within_scope
 from app.services.files_upsert import (
     UPDATE_DATA_SOURCE_SUCCESS_SQL,
     UPSERT_FILE_SQL,
@@ -52,6 +58,28 @@ PARTIAL_SUCCESS_MESSAGE = (
     "WebDAV recursive sync completed with some failed directories"
 )
 DB_SAVE_FAIL_MESSAGE = "Failed to save WebDAV tree items to database"
+DELETION_MARK_FAIL_MESSAGE = "Failed to mark deleted files"
+
+
+# Deleted-detection skip warnings — surfaced in the response's ``warnings``
+# list. Multiple reasons can co-exist (e.g. partial + exclusions).
+_WARN_DETECT_DISABLED = (
+    "Deleted detection is disabled. "
+    "Existing files not found in this sync were not marked as DELETED."
+)
+_WARN_SKIP_TRUNCATED = (
+    "Deleted detection was skipped because sync result was truncated."
+)
+_WARN_SKIP_PARTIAL = (
+    "Deleted detection was skipped because some directories failed to sync."
+)
+_WARN_SKIP_EXCLUSIONS = (
+    "Deleted detection was skipped because exclusion policies were applied. "
+    "Run with apply_exclusions=false for deleted detection."
+)
+_WARN_SKIP_HIDDEN = (
+    "Deleted detection was skipped because hidden items were excluded."
+)
 
 # Defensive bounds on the request parameters (the route also constrains
 # these via FastAPI ``Query``; keep them in sync with the spec).
@@ -124,6 +152,35 @@ def _summarize_failed_paths(failed_paths: list[dict[str, str]]) -> str:
     return head
 
 
+def _decide_deleted_detection(
+    *,
+    detect_deleted: bool,
+    truncated: bool,
+    failed_count: int,
+    apply_exclusions: bool,
+    include_hidden: bool,
+) -> tuple[bool, list[str]]:
+    """Return ``(should_run, skip_warnings)`` for the deletion stage.
+
+    All skip reasons are aggregated so the operator gets a clear picture of
+    what blocked detection. When ``detect_deleted`` is ``False`` we surface
+    the single "disabled" notice rather than the gate-specific warnings.
+    """
+    if not detect_deleted:
+        return False, [_WARN_DETECT_DISABLED]
+
+    skips: list[str] = []
+    if truncated:
+        skips.append(_WARN_SKIP_TRUNCATED)
+    if failed_count > 0:
+        skips.append(_WARN_SKIP_PARTIAL)
+    if apply_exclusions:
+        skips.append(_WARN_SKIP_EXCLUSIONS)
+    if not include_hidden:
+        skips.append(_WARN_SKIP_HIDDEN)
+    return (not skips), skips
+
+
 def run_webdav_recursive_sync(
     settings: Settings,
     ds_id: UUID,
@@ -133,11 +190,18 @@ def run_webdav_recursive_sync(
     max_items: int,
     include_hidden: bool,
     apply_exclusions: bool,
+    detect_deleted: bool = False,
 ) -> tuple[dict[str, Any], int]:
     """Run a bounded recursive BFS sync; return ``(payload, http_status_code)``.
 
     Raises ``DataSourceNotFound`` when ``ds_id`` does not exist (the route
     layer maps this to HTTP 404). Other failures are returned inline.
+
+    When ``detect_deleted`` is ``True`` and all safety conditions hold
+    (non-truncated, no failed folders, exclusions disabled, hidden items
+    included), rows that fall inside ``start_path``'s scope but were not
+    discovered during this walk are soft-marked
+    ``analysis_status = 'DELETED'`` in the same transaction.
     """
     row = datasource_svc.fetch_data_source_row_internal(ds_id=ds_id)
     source_type_str = str(row["source_type"]).strip().upper()
@@ -151,6 +215,7 @@ def run_webdav_recursive_sync(
     md = _clamp(int(max_depth), 0, MAX_DEPTH_CEILING)
     mi = _clamp(int(max_items), 1, MAX_ITEMS_CEILING)
     sp = _canonical_start_path(start_path)
+    detect_deleted_flag = bool(detect_deleted)
     request_summary: dict[str, Any] = {
         "start_path": sp,
         "max_depth": md,
@@ -304,6 +369,7 @@ def run_webdav_recursive_sync(
             "visited_directories": counters.visited_directories,
             "http_status": fatal.get("http_status"),
             "response_ms": fatal.get("response_ms"),
+            "detect_deleted": detect_deleted_flag,
         }
         if aggregated_warnings:
             extra["warnings"] = aggregated_warnings
@@ -319,6 +385,26 @@ def run_webdav_recursive_sync(
             200,
         )
 
+    # Decide whether deletion detection will run *before* opening the DB
+    # transaction so we can shape ``aggregated_warnings`` consistently and
+    # bail out of the deletion stage cheaply on the gate failures.
+    should_detect_deleted, deletion_skip_warnings = _decide_deleted_detection(
+        detect_deleted=detect_deleted_flag,
+        truncated=counters.truncated,
+        failed_count=counters.failed_count,
+        apply_exclusions=apply_exclusions,
+        include_hidden=include_hidden,
+    )
+    for w in deletion_skip_warnings:
+        if len(aggregated_warnings) < _WARNINGS_LIMIT:
+            aggregated_warnings.append(w)
+
+    collected_paths: list[str] = [
+        str(it.get("remote_path"))
+        for it in items
+        if it.get("remote_path")
+    ]
+
     inserted = 0
     updated = 0
     dirs = 0
@@ -330,6 +416,9 @@ def run_webdav_recursive_sync(
         final_msg = SUCCESS_TRUNCATED_MESSAGE
     else:
         final_msg = SUCCESS_MESSAGE
+
+    deleted_marked_count = 0
+    deletion_marking_failed = False
 
     try:
         with get_db_connection() as conn:
@@ -363,6 +452,19 @@ def run_webdav_recursive_sync(
                             dirs += 1
                         else:
                             files_cnt += 1
+
+                    if should_detect_deleted:
+                        try:
+                            deleted_marked_count = mark_deleted_within_scope(
+                                cur,
+                                ds_id=ds_id,
+                                start_path=sp,
+                                collected_paths=collected_paths,
+                            )
+                        except Exception:
+                            deletion_marking_failed = True
+                            raise
+
                     cur.execute(
                         UPDATE_DATA_SOURCE_SUCCESS_SQL,
                         (truncate_message(final_msg), ds_id),
@@ -372,19 +474,25 @@ def run_webdav_recursive_sync(
                 conn.rollback()
                 raise
     except Exception as exc:
-        scan_jobs_service.fail_scan_job(
-            job_id=scan_job_id, error_message=DB_SAVE_FAIL_MESSAGE
+        fail_msg = (
+            DELETION_MARK_FAIL_MESSAGE
+            if deletion_marking_failed
+            else DB_SAVE_FAIL_MESSAGE
         )
-        _record_outcome_on_data_source(ds_id, False, DB_SAVE_FAIL_MESSAGE)
+        scan_jobs_service.fail_scan_job(
+            job_id=scan_job_id, error_message=fail_msg
+        )
+        _record_outcome_on_data_source(ds_id, False, fail_msg)
         return (
             _error_payload(
                 base=base,
                 scan_job_id=scan_job_id,
                 request_summary=request_summary,
-                message=DB_SAVE_FAIL_MESSAGE,
+                message=fail_msg,
                 error=str(exc),
                 extra={
                     "visited_directories": counters.visited_directories,
+                    "detect_deleted": detect_deleted_flag,
                     "warnings": aggregated_warnings,
                 },
             ),
@@ -411,6 +519,7 @@ def run_webdav_recursive_sync(
         completed_files=processed,
         failed_files=counters.failed_count,
         skipped_files=counters.excluded_count + dirs,
+        deleted_files=deleted_marked_count,
         error_message=scan_jobs_error_summary,
     )
 
@@ -427,8 +536,10 @@ def run_webdav_recursive_sync(
         "directories_count": dirs,
         "files_count": files_cnt,
         "excluded_count": counters.excluded_count,
+        "deleted_marked_count": deleted_marked_count,
         "failed_count": counters.failed_count,
         "truncated": counters.truncated,
+        "detect_deleted": detect_deleted_flag,
         "message": final_msg,
         "warnings": aggregated_warnings,
     }

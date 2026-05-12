@@ -189,6 +189,7 @@ def sync_data_source_webdav_tree(
     max_items: Annotated[int, Query(ge=1, le=50000)] = 5000,
     include_hidden: Annotated[bool, Query()] = False,
     apply_exclusions: Annotated[bool, Query()] = True,
+    detect_deleted: Annotated[bool, Query()] = False,
 ) -> JSONResponse:
     """Bounded BFS recursive WebDAV sync (PROPFIND Depth: 1 per folder).
 
@@ -196,6 +197,12 @@ def sync_data_source_webdav_tree(
     transaction. ``max_depth`` and ``max_items`` bound the walk; the
     operation runs synchronously inside the request and is expected to
     move to a worker queue in later milestones.
+
+    ``detect_deleted`` (default ``false``) opts into Step 11's soft-mark of
+    rows that disappeared between scans. Detection only runs when the walk
+    was complete and unfiltered (``truncated=false``, ``failed_count=0``,
+    ``apply_exclusions=false``, ``include_hidden=true``); otherwise a
+    skip-reason warning is returned and ``deleted_marked_count`` stays 0.
     """
     try:
         payload, code = run_webdav_recursive_sync(
@@ -206,6 +213,7 @@ def sync_data_source_webdav_tree(
             max_items=max_items,
             include_hidden=include_hidden,
             apply_exclusions=apply_exclusions,
+            detect_deleted=detect_deleted,
         )
         return JSONResponse(status_code=code, content=payload)
     except datasource_svc.DataSourceNotFound:
