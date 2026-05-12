@@ -2,10 +2,15 @@
 
 Stores credentials encrypted; probes WebDAV via PROPFIND (Depth: 0),
 previews root children via Depth: 1 (no DB writes), upserts root children
-into the ``files`` table via a one-level sync, and walks the tree with a
+into the ``files`` table via a one-level sync, walks the tree with a
 bounded BFS recursive sync (PROPFIND Depth: 1 per folder, ``max_depth`` /
-``max_items``-limited). No downloads, hashing, chunking, embedding, or
-deletion detection at this stage.
+``max_items``-limited) with opt-in soft-mark deletion detection
+(``detect_deleted``), downloads PENDING text files into ``file_contents``
+via the Step-12 processor, slices the resulting ``extracted_text`` into
+``document_chunks`` via the Step-13 chunker, and embeds those chunks into
+``document_chunks.embedding vector(1024)`` via the Step-14 embedder
+(bumping ``files.last_indexed_at`` once every chunk of that file has a
+non-``NULL`` vector). No retrieval / RAG / search at this stage.
 """
 
 from __future__ import annotations
@@ -30,9 +35,21 @@ from app.services.data_source_service import (
     DataSourceNotFound,
 )
 from app.services import data_source_service as datasource_svc
+from app.services.chunk_embedding_service import (
+    FileNotInDataSource,
+    run_embed_pending_chunks,
+)
+from app.services.chunk_text_processor_service import (
+    InvalidChunkParameters,
+    run_chunk_completed_text,
+)
 from app.services.file_recursive_sync_service import run_webdav_recursive_sync
 from app.services.file_stats_service import get_file_statistics
 from app.services.file_sync_service import run_webdav_root_sync
+from app.services.pending_text_processor_service import (
+    run_process_pending_text,
+)
+from app.services.text_extraction_service import parse_include_extensions
 from app.webdav.connection_test import run_webdav_connection_test
 from app.webdav.listing import run_webdav_root_listing
 
@@ -218,6 +235,143 @@ def sync_data_source_webdav_tree(
         return JSONResponse(status_code=code, content=payload)
     except datasource_svc.DataSourceNotFound:
         return _not_found_resp()
+    except Exception as exc:  # pragma: no cover
+        return _srv_err_resp(exc)
+
+
+@router.post("/{data_source_id}/process-pending-text", response_model=None)
+def process_data_source_pending_text(
+    data_source_id: UUID,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+    max_file_size_bytes: Annotated[int, Query(ge=1, le=268_435_456)] = 5_242_880,
+    include_extensions: Annotated[str | None, Query()] = None,
+    dry_run: Annotated[bool, Query()] = False,
+) -> JSONResponse:
+    """Download PENDING text files and persist their text in ``file_contents``.
+
+    Walks the configured WebDAV source via HTTP GET (no PROPFIND), keeps
+    each file's transaction tiny so a single bad file cannot poison the
+    batch, and never logs Authorization headers or credential plaintext.
+
+    Out of scope at this milestone: chunking, embeddings,
+    ``document_chunks`` writes, PDF/DOCX/HWP/XLSX parsing, and any RAG
+    / search behavior.
+    """
+    try:
+        ext_set = parse_include_extensions(include_extensions)
+        payload, code = run_process_pending_text(
+            settings,
+            data_source_id,
+            limit=limit,
+            max_file_size_bytes=max_file_size_bytes,
+            include_extensions=ext_set,
+            dry_run=dry_run,
+        )
+        return JSONResponse(status_code=code, content=payload)
+    except datasource_svc.DataSourceNotFound:
+        return _not_found_resp()
+    except Exception as exc:  # pragma: no cover
+        return _srv_err_resp(exc)
+
+
+@router.post("/{data_source_id}/chunk-completed-text", response_model=None)
+def chunk_data_source_completed_text(
+    data_source_id: UUID,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+    chunk_size: Annotated[int, Query(ge=200, le=10_000)] = 1200,
+    chunk_overlap: Annotated[int, Query(ge=0, le=9_999)] = 200,
+    min_chunk_size: Annotated[int, Query(ge=0, le=10_000)] = 100,
+    reprocess: Annotated[bool, Query()] = False,
+    dry_run: Annotated[bool, Query()] = False,
+    include_extensions: Annotated[str | None, Query()] = None,
+) -> JSONResponse:
+    """Slice ``file_contents.extracted_text`` into ``document_chunks``.
+
+    Character-based splitter with paragraph-boundary preference. Walks
+    files whose ``analysis_status='COMPLETED'`` and that have a
+    populated ``file_contents`` row. Per-file transactions keep one bad
+    file from poisoning the batch; ``files.last_indexed_at`` is **not**
+    updated here because embeddings still need to be generated in a
+    later milestone (``document_chunks.embedding`` is written as
+    ``NULL`` for now).
+    """
+    try:
+        ext_set = parse_include_extensions(include_extensions)
+        payload, code = run_chunk_completed_text(
+            data_source_id,
+            limit=limit,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            min_chunk_size=min_chunk_size,
+            reprocess=reprocess,
+            dry_run=dry_run,
+            include_extensions=ext_set,
+        )
+        return JSONResponse(status_code=code, content=payload)
+    except datasource_svc.DataSourceNotFound:
+        return _not_found_resp()
+    except InvalidChunkParameters as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": "Invalid chunking parameters",
+                "error": exc.error,
+            },
+        )
+    except Exception as exc:  # pragma: no cover
+        return _srv_err_resp(exc)
+
+
+@router.post("/{data_source_id}/embed-pending-chunks", response_model=None)
+def embed_data_source_pending_chunks(
+    data_source_id: UUID,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 500,
+    batch_size: Annotated[int, Query(ge=1, le=128)] = 32,
+    include_extensions: Annotated[str | None, Query()] = None,
+    reembed: Annotated[bool, Query()] = False,
+    file_id: Annotated[UUID | None, Query()] = None,
+    dry_run: Annotated[bool, Query()] = False,
+) -> JSONResponse:
+    """Embed ``document_chunks`` with ``embedding IS NULL`` and store
+    1024-D vectors into ``document_chunks.embedding vector(1024)``.
+
+    Reuses the Step-3 Ollama embedding client (``bge-m3``, dimension
+    1024). Per-batch transactions keep one bad chunk from poisoning
+    the whole job; ``files.last_indexed_at`` is bumped only after
+    every chunk of that file carries a non-``NULL`` embedding. With
+    ``reembed=true`` existing embeddings are regenerated. ``file_id``
+    narrows the batch to a single file (the file must belong to the
+    URL data source — otherwise 404). ``dry_run=true`` returns the
+    target / batch counts and per-file ``target_chunks`` without
+    touching the database or calling the embedding API.
+
+    Out of scope at this milestone: search APIs, RAG retrieval / answer
+    generation, chat, PDF / DOCX / HWP / XLSX parsing.
+    """
+    try:
+        ext_set = parse_include_extensions(include_extensions)
+        payload, code = run_embed_pending_chunks(
+            settings,
+            data_source_id,
+            limit=limit,
+            batch_size=batch_size,
+            include_extensions=ext_set,
+            reembed=reembed,
+            file_id=file_id,
+            dry_run=dry_run,
+        )
+        return JSONResponse(status_code=code, content=payload)
+    except datasource_svc.DataSourceNotFound:
+        return _not_found_resp()
+    except FileNotInDataSource:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "status": "error",
+                "message": "File not found in data source",
+            },
+        )
     except Exception as exc:  # pragma: no cover
         return _srv_err_resp(exc)
 
