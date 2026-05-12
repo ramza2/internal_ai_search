@@ -1,8 +1,11 @@
 """REST API for WebDAV / local data source registrations (admin-style CRUD).
 
-Stores credentials encrypted; probes WebDAV via PROPFIND (Depth: 0) and lists
-root children via Depth: 1 preview — no recursion, downloads, indexing, or
-`files` table writes from listing.
+Stores credentials encrypted; probes WebDAV via PROPFIND (Depth: 0),
+previews root children via Depth: 1 (no DB writes), upserts root children
+into the ``files`` table via a one-level sync, and walks the tree with a
+bounded BFS recursive sync (PROPFIND Depth: 1 per folder, ``max_depth`` /
+``max_items``-limited). No downloads, hashing, chunking, embedding, or
+deletion detection at this stage.
 """
 
 from __future__ import annotations
@@ -27,6 +30,9 @@ from app.services.data_source_service import (
     DataSourceNotFound,
 )
 from app.services import data_source_service as datasource_svc
+from app.services.file_recursive_sync_service import run_webdav_recursive_sync
+from app.services.file_stats_service import get_file_statistics
+from app.services.file_sync_service import run_webdav_root_sync
 from app.webdav.connection_test import run_webdav_connection_test
 from app.webdav.listing import run_webdav_root_listing
 
@@ -116,6 +122,90 @@ def list_data_source_webdav_root(
             data_source_id,
             limit=limit,
             include_hidden=include_hidden,
+        )
+        return JSONResponse(status_code=code, content=payload)
+    except datasource_svc.DataSourceNotFound:
+        return _not_found_resp()
+    except Exception as exc:  # pragma: no cover
+        return _srv_err_resp(exc)
+
+
+@router.get("/{data_source_id}/file-stats", response_model=None)
+def get_data_source_file_stats(
+    data_source_id: UUID,
+    include_deleted: Annotated[bool, Query()] = False,
+) -> JSONResponse:
+    """Convenience alias for ``GET /api/files/stats?data_source_id={id}``."""
+    try:
+        payload = get_file_statistics(
+            data_source_id=data_source_id,
+            include_deleted=include_deleted,
+        )
+        return JSONResponse(status_code=200, content=payload)
+    except DataSourceNotFound:
+        return _not_found_resp()
+    except Exception as exc:  # pragma: no cover - defensive
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": "Failed to retrieve file statistics",
+                "error": str(exc),
+            },
+        )
+
+
+@router.post("/{data_source_id}/sync-root", response_model=None)
+def sync_data_source_webdav_root(
+    data_source_id: UUID,
+    limit: Annotated[int, Query(ge=1, le=10000)] = 1000,
+    include_hidden: Annotated[bool, Query()] = False,
+) -> JSONResponse:
+    """Upsert direct children of the registered WebDAV root into ``files``.
+
+    Single transaction: all-or-nothing across the upserts and the
+    ``data_sources.last_scan_at`` update. No recursion, downloads, hashing,
+    chunking, or deletion detection — only one level beneath ``webdav_root_path``.
+    """
+    try:
+        payload, code = run_webdav_root_sync(
+            settings,
+            data_source_id,
+            limit=limit,
+            include_hidden=include_hidden,
+        )
+        return JSONResponse(status_code=code, content=payload)
+    except datasource_svc.DataSourceNotFound:
+        return _not_found_resp()
+    except Exception as exc:  # pragma: no cover
+        return _srv_err_resp(exc)
+
+
+@router.post("/{data_source_id}/sync-tree", response_model=None)
+def sync_data_source_webdav_tree(
+    data_source_id: UUID,
+    start_path: Annotated[str, Query()] = "/",
+    max_depth: Annotated[int, Query(ge=0, le=20)] = 3,
+    max_items: Annotated[int, Query(ge=1, le=50000)] = 5000,
+    include_hidden: Annotated[bool, Query()] = False,
+    apply_exclusions: Annotated[bool, Query()] = True,
+) -> JSONResponse:
+    """Bounded BFS recursive WebDAV sync (PROPFIND Depth: 1 per folder).
+
+    Upserts every visited file/folder into ``files`` in a single
+    transaction. ``max_depth`` and ``max_items`` bound the walk; the
+    operation runs synchronously inside the request and is expected to
+    move to a worker queue in later milestones.
+    """
+    try:
+        payload, code = run_webdav_recursive_sync(
+            settings,
+            data_source_id,
+            start_path=start_path,
+            max_depth=max_depth,
+            max_items=max_items,
+            include_hidden=include_hidden,
+            apply_exclusions=apply_exclusions,
         )
         return JSONResponse(status_code=code, content=payload)
     except datasource_svc.DataSourceNotFound:

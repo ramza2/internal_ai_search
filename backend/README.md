@@ -9,6 +9,9 @@ This backend follows a phased roadmap. Implemented so far:
 - **Step 5:** Data source registrations — WebDAV-backed stores CRUD (`/api/data-sources`)
 - **Step 6:** WebDAV connection probe — PROPFIND smoke test (`POST /api/data-sources/{id}/test-connection`)
 - **Step 7:** WebDAV root listing — PROPFIND Depth:1 preview (`POST /api/data-sources/{id}/list-root`, no `files` table writes)
+- **Step 8:** WebDAV root sync — upsert Depth:1 children into `files` (`POST /api/data-sources/{id}/sync-root`, no recursion / downloads / deletion detection)
+- **Step 9:** File statistics — read-only aggregation over `files` (`GET /api/files/stats`, `GET /api/data-sources/{id}/file-stats`, SQL-side grouping only)
+- **Step 10:** WebDAV recursive sync — bounded BFS over PROPFIND Depth:1 (`POST /api/data-sources/{id}/sync-tree`), upserts every visited item into `files` with `exclusion_policies` applied. No downloads / hashing / deletion detection.
 
 ## Project structure
 
@@ -35,13 +38,24 @@ backend/
 │  │  ├─ __init__.py
 │  │  ├─ client.py
 │  │  ├─ connection_test.py
-│  │  └─ listing.py
+│  │  ├─ listing.py
+│  │  └─ recursive_listing.py
 │  ├─ api/
 │  │  ├─ health.py
-│  │  └─ data_sources.py
+│  │  ├─ data_sources.py
+│  │  └─ files.py
 │  ├─ services/
 │  │  ├─ __init__.py
-│  │  └─ data_source_service.py
+│  │  ├─ data_source_service.py
+│  │  ├─ exclusion_policy_service.py
+│  │  ├─ file_recursive_sync_service.py
+│  │  ├─ file_stats_service.py
+│  │  ├─ file_sync_service.py
+│  │  ├─ files_upsert.py
+│  │  └─ scan_jobs_service.py
+│  ├─ utils/
+│  │  ├─ __init__.py
+│  │  └─ file_type.py
 │  └─ schemas/
 │     └─ data_source.py
 ├─ requirements.txt
@@ -108,9 +122,9 @@ Copy-Item .env.example .env
 
   or supply any non-empty string (the backend derives a Fernet-compatible key via SHA-256 — convenient for development, weaker than a dedicated key). Rotate before production and **never** commit production keys.
 
-### WebDAV probe & listing (Steps 6–7)
+### WebDAV probe, listing, and sync (Steps 6–8, 10)
 
-- `WEBDAV_TIMEOUT_SECONDS` — HTTP timeout (seconds) for `PROPFIND` during `POST /api/data-sources/{id}/test-connection` and `POST /api/data-sources/{id}/list-root`.
+- `WEBDAV_TIMEOUT_SECONDS` — per-`PROPFIND` HTTP timeout (seconds). Applied to `test-connection`, `list-root`, `sync-root`, **and every per-folder PROPFIND during `sync-tree`** (each folder gets its own request).
 
 ### Ollama (Step 2)
 
@@ -338,7 +352,102 @@ Example:
 curl -X POST "http://localhost:8000/api/data-sources/{id}/list-root?limit=100&include_hidden=false"
 ```
 
+### WebDAV root sync (`POST /api/data-sources/{id}/sync-root`, Step 8)
+
+Persists **direct children only** under the configured `webdav_root_path` into the **`files`** table via **`PROPFIND`** + **`Depth: 1`** (same request shape as Step 7). One level only — there is **no recursion**, **no download**, **no body analysis**, **no chunking / embedding**, and **no deletion detection** in this milestone.
+
+- **Upsert key:** **`(data_source_id, remote_path)`** — duplicates are prevented via the table's `UNIQUE` constraint and `INSERT ... ON CONFLICT ... DO UPDATE`. The endpoint distinguishes inserts vs updates using PostgreSQL's `xmax = 0` trick on the `RETURNING` row.
+- **Field mapping** (from the WebDAV item → `files` column):
+  `name → filename`, `extension`, `is_directory`, `size_bytes`, `etag`, `last_modified` (parsed from listing's ISO-8601 string), `content_type → mime_type`. `content_hash` and `last_indexed_at` are kept **`NULL`** at this stage.
+- **`analysis_status` policy**
+  - Directories → **`SKIPPED`** (folders are not analyzed).
+  - Files (new rows) → **`PENDING`**.
+  - Files (existing rows) → reset to **`PENDING`** only if **`etag`** or **`last_modified`** changed; otherwise the current status is preserved (e.g. `COMPLETED` stays `COMPLETED`).
+- **Transactions:** the **entire upsert batch + the `data_sources` finalization** runs inside one transaction. Any failure rolls back the whole batch (no partial successes); `scan_jobs` is recorded as **`FAILED`** in that case.
+- **`scan_jobs` (best-effort):** a `MANUAL_SCAN` row is inserted as **`RUNNING`** before the WebDAV fetch and finalized to **`COMPLETED`** / **`FAILED`** afterwards. `requested_by` is `NULL` (auth comes later). If the `scan_jobs` table or its enum types are not present yet, the column is silently skipped and the response shows `"scan_job_id": null`.
+- **`data_sources` on success:** **`last_scan_at`**, **`last_connection_test_at`**, **`last_connection_success = TRUE`**, **`last_connection_message = "WebDAV root sync succeeded"`** (or **`"...succeeded with truncated result"`**), and **`updated_at`** are all set in the same transaction.
+- **`data_sources` on failure:** `last_scan_at` is **not** touched; `last_connection_*` and `updated_at` reflect the failure summary.
+- **Query parameters**
+  - **`limit`** (default **1000**, max **10000**) — cap on items processed; if more entries exist, the response returns `truncated: true` and a warning `Result was truncated by limit=N`.
+  - **`include_hidden`** (default **`false`**) — same hidden-name filter as Step 7 (`.git`, `.svn`, `.env`, `.idea`, `.vscode`, names starting with `.`). Formal exclusions will later follow `exclusion_policies`.
+- **Out of scope:** WebDAV recursion, deletion / rename detection (existing rows missing from the listing are **not** marked `DELETED`), file downloads, content hashing, mime sniffing, chunking, embeddings, and `document_chunks` writes. Those move to later milestones.
+- **Security:** identical to Steps 6–7 — `credential_secret`, `credential_secret_enc`, `Authorization`, and plaintext passwords are **never** logged or returned, including in error bodies.
+
+```bash
+curl -X POST "http://localhost:8000/api/data-sources/{id}/sync-root?limit=1000&include_hidden=false"
+```
+
+### File statistics (`GET /api/files/stats`, `GET /api/data-sources/{id}/file-stats`, Step 9)
+
+Read-only dashboard endpoint that aggregates the **`files`** table. All counts and totals are computed in SQL using **`COUNT`**, **`SUM`**, and **`GROUP BY`** with **`FILTER (WHERE ...)`** clauses; the API never materializes the full row set in Python. The Top-N largest files use a single **`ORDER BY size_bytes DESC LIMIT 10`** query.
+
+- **Scope**
+  - **`data_source_id`** (query, optional) — restricts the aggregation to a single data source. When omitted, the response covers every data source and includes a **`by_data_source`** breakdown.
+  - **`include_deleted`** (default **`false`**) — when `false`, rows with **`analysis_status = 'DELETED'`** are excluded from every section (summary, status, extension, file type, top files, per-source).
+- **Sections**
+  - **`summary`** — `total_items` (folders + files), `total_files`, `total_directories`, `total_size_bytes` (files only — folders carry `NULL` sizes), `total_size_human` (binary units, KB = 1024), `latest_modified_at` (max `last_modified` across rows in scope), `last_synced_at` (data source's `last_scan_at`, or the latest across all data sources when unscoped).
+  - **`by_analysis_status`** — `[ { status, count } ]` over all in-scope rows (folders are **`SKIPPED`**, files cycle through `PENDING` → `PROCESSING` → `COMPLETED` / `FAILED`).
+  - **`by_extension`** — files only (`is_directory = FALSE`); extension is lower-cased server-side, and rows with no extension are rendered as **`"(none)"`**. Each row carries the matching **`file_type`** label.
+  - **`by_file_type`** — files only; rolled up by the file-type classification below.
+  - **`top_largest_files`** — up to **10** files in scope, with `id`, `filename`, `remote_path`, `extension`, `size_bytes`, `size_human`, and `last_modified` (ISO-8601).
+  - **`by_data_source`** *(only when `data_source_id` is omitted)* — one row per registered data source with `total_files`, `total_directories`, `total_size_bytes`, and the data source's `last_scan_at`.
+- **File-type classification** (extension is normalized via `lower(trim(extension))`; empty/`NULL` ⇒ `UNKNOWN`):
+  - **`DOCUMENT`** — `txt, md, markdown, pdf, doc, docx, hwp, hwpx, ppt, pptx, xls, xlsx, csv`
+  - **`SOURCE_CODE`** — `py, java, kt, js, ts, tsx, jsx, c, cpp, h, hpp, cs, go, rs, php, rb, swift, sql, html, css, scss, vue`
+  - **`CONFIG`** — `json, xml, yaml, yml, ini, conf, properties, env, toml`
+  - **`LOG`** — `log`
+  - **`ARCHIVE`** — `zip, 7z, rar, tar, gz, tgz`
+  - **`IMAGE`** — `png, jpg, jpeg, gif, bmp, webp, svg, psd, ai`
+  - **`AUDIO_VIDEO`** — `mp3, wav, mp4, avi, mov, mkv, webm`
+  - **`BINARY`** — `exe, dll, so, dylib, class, jar, war, ear, bin, o, obj`
+  - **`UNKNOWN`** — anything else (or no extension).
+
+  The classification is owned by **`app/utils/file_type.py`**. The same constants drive the Python helper (`classify_extension`) and the SQL `CASE` (`FILE_TYPE_CASE_SQL`) so reports and DB aggregation stay in lock-step.
+- **Convenience alias:** **`GET /api/data-sources/{id}/file-stats?include_deleted=false`** returns the same payload as **`GET /api/files/stats?data_source_id={id}`** and responds **404 `Data source not found`** when the id is unknown.
+- **Out of scope:** this milestone never triggers a WebDAV call, recursion, download, body analysis, chunking, embedding, or deletion / move detection — it is purely a `files`-table read.
+
+```bash
+curl "http://localhost:8000/api/files/stats"
+curl "http://localhost:8000/api/files/stats?data_source_id={id}"
+curl "http://localhost:8000/api/files/stats?include_deleted=true"
+curl "http://localhost:8000/api/data-sources/{id}/file-stats"
+```
+
+### WebDAV recursive sync (`POST /api/data-sources/{id}/sync-tree`, Step 10)
+
+Bounded **BFS** over **`PROPFIND`** with **`Depth: 1`** per folder. Walks the tree below `webdav_root_path` (or below `start_path` when set), normalizes each item's path **relative to `webdav_root_path`**, applies the configured exclusions, and **upserts** every survivor into the **`files`** table in a single transaction. No content downloads, no hashing, no chunking, no embedding, no deletion detection in this milestone.
+
+- **Query parameters**
+  - **`start_path`** (default **`/`**) — path **relative to `webdav_root_path`**; e.g. `/`, `/project-a`, `/docs/sub`. Percent-encoded segment-by-segment before being appended to the WebDAV URL.
+  - **`max_depth`** (default **`3`**, range **0–20**) — number of folder layers below `start_path` that are entered. With `max_depth=0` only direct children of `start_path` are recorded (equivalent to `sync-root` rooted at `start_path`).
+  - **`max_items`** (default **`5000`**, max **`50000`**) — hard cap on the items collected before a transaction-time upsert. When reached, the response carries `truncated: true` and `Result was truncated by max_items=N` in `warnings`.
+  - **`include_hidden`** (default **`false`**) — drops names beginning with `.` (covers `.git`, `.env`, `.svn`, `.idea`, `.vscode`, ...). Applied **regardless** of `apply_exclusions`.
+  - **`apply_exclusions`** (default **`true`**) — when `false`, skips the `exclusion_policies` DB read entirely (the hidden-name rule above still applies).
+- **`exclusion_policies` semantics** (active rows where `data_source_id IS NULL` are global; rows matching the requested `data_source_id` add per-source rules)
+  - **`FOLDER`** — folder name match (case-insensitive, leading/trailing slashes stripped). Excluded folders are dropped from `items` **and** their subtree is not enqueued.
+  - **`EXTENSION`** — file extension match (case-insensitive, `.` ignored).
+  - **`PATH_PATTERN`** — simple substring match against the data-source-relative `remote_path`.
+  - **`MAX_FILE_SIZE`** — `pattern` parsed as integer bytes; files larger than that are excluded. Multiple policies → the **most restrictive** value wins. Unparseable values are ignored and recorded in `warnings`.
+  - If the table or enum types are not yet present, the loader returns an empty filter and adds a warning; the sync still runs.
+- **`files` upsert** (shared with `sync-root` via `services/files_upsert.py`): conflicts on `(data_source_id, remote_path)`, refreshes metadata, flips files back to **`PENDING`** only when `etag` / `last_modified` actually changed, keeps folders as **`SKIPPED`**, and never persists ciphertext or credentials.
+- **Transactionality:** the WebDAV walk runs **outside** any DB transaction (it's network I/O bounded by `max_items`); the collected items are then upserted alongside the `data_sources.last_scan_at` finalization inside **one** DB transaction (whole-batch rollback on failure).
+- **`data_sources` finalization**
+  - Success / partial → `last_scan_at`, `last_connection_test_at`, `last_connection_success = TRUE`, `last_connection_message = "WebDAV recursive sync succeeded"` / `"...stopped by max_items limit"` / `"...completed with some failed directories"`.
+  - Fatal failure on the *start folder* (auth, 404, connection error, …) → `last_connection_*` only; **`last_scan_at` is not bumped**.
+- **`scan_jobs`** (best-effort): `MANUAL_SCAN` row created as `RUNNING`; finalized with `total_files = total_remote_items`, `processed_files = inserted + updated`, `completed_files = processed_files`, `failed_files = failed_count`, `skipped_files = excluded + directories`. Partial successes still finalize as **`COMPLETED`** but carry a short `error_message` summary of failed folders.
+- **Response shape** — counters include `visited_directories`, `total_remote_items`, `processed_items`, `inserted_count`, `updated_count`, `directories_count`, `files_count`, `excluded_count`, `failed_count`, `truncated`. Partial runs add `failed_paths[]` (capped at 20). `warnings[]` is also capped at 20.
+- **Out of scope:** deletion detection (rows missing from the walk are **not** marked `DELETED`), file downloads, content hashing / `content_hash`, mime sniffing beyond the server-provided `getcontenttype`, chunking, embeddings, and `document_chunks` writes.
+- **Operational note:** this endpoint runs synchronously inside the HTTP request, with `max_depth` / `max_items` for safety. The current shape is **intentionally minimal**; in production the recursive walk is expected to move to a worker queue (separate process) so that long traversals do not hold an HTTP connection.
+
+```bash
+# Whole tree from root, three levels deep, default exclusions on
+curl -X POST "http://localhost:8000/api/data-sources/{id}/sync-tree?start_path=/&max_depth=3&max_items=5000&include_hidden=false&apply_exclusions=true"
+
+# Deeper walk under a subfolder, hidden names included, exclusions off
+curl -X POST "http://localhost:8000/api/data-sources/{id}/sync-tree?start_path=/project-a&max_depth=5&max_items=10000&include_hidden=true&apply_exclusions=false"
+```
+
 ## Notes
 
-- Steps 1–7 wire health checks, pgvector smoke tests, credential-safe data-source CRUD, a **minimal** DAV probe, and **one-level** WebDAV previews — still **no** recursive crawl, ingestion, authenticated UI, RBAC, or RAG/search.
+- Steps 1–10 wire health checks, pgvector smoke tests, credential-safe data-source CRUD, a **minimal** DAV probe, **one-level** WebDAV previews and sync, a read-only **file statistics** endpoint, and a **bounded recursive** WebDAV sync (BFS, Depth:1 per folder, `max_depth` / `max_items`) with **`exclusion_policies`** applied — still **no** file downloads, content hashing, chunking, embeddings, deletion detection, authenticated UI, RBAC, or RAG/search.
 - Structure is kept small for later ingestion, delta sync, scheduling, Docker Compose packaging, React admin screens, and search APIs.
