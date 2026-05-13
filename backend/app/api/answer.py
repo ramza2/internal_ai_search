@@ -16,12 +16,14 @@ Error mapping follows the rest of the project:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
+from app.core.auth_dependencies import CurrentUserContext, require_password_ready_user
 from app.core.config import settings
 from app.schemas.answer import AnswerRequest, AnswerResponse
+from app.services.action_log_service import write_action_log_safe
 from app.services.rag_answer_service import (
     ContextBuildError,
     DataSourceNotFound,
@@ -140,8 +142,61 @@ def _looks_like_empty_query(err: ValidationError) -> bool:
     return False
 
 
+def _log_rag(
+    *,
+    request: Request,
+    user_id,
+    parsed: AnswerRequest | None,
+    result: str,
+    response: AnswerResponse | None,
+    error_message: str | None,
+) -> None:
+    q = parsed.query if parsed else None
+    detail: dict = {}
+    if parsed and response:
+        se = response.search
+        detail = {
+            "search_mode": response.search_mode.value,
+            "data_source_id": str(parsed.data_source_id)
+            if parsed.data_source_id
+            else None,
+            "search_limit": parsed.search_limit,
+            "context_limit": parsed.context_limit,
+            "used_context_count": se.used_context_count,
+            "total_results": se.total_results,
+            "finish_reason": response.finish_reason,
+            "dry_run": parsed.dry_run,
+        }
+    elif parsed:
+        detail = {
+            "search_mode": parsed.search_mode.value,
+            "data_source_id": str(parsed.data_source_id)
+            if parsed.data_source_id
+            else None,
+            "search_limit": parsed.search_limit,
+            "context_limit": parsed.context_limit,
+            "used_context_count": None,
+            "total_results": None,
+            "finish_reason": None,
+            "dry_run": parsed.dry_run,
+        }
+    write_action_log_safe(
+        user_id=user_id,
+        action_type="RAG_QUESTION",
+        result=result,
+        request=request,
+        search_query=q,
+        data_source_id=parsed.data_source_id if parsed else None,
+        detail=detail,
+        error_message=error_message,
+    )
+
+
 @router.post("/answer", response_model=None)
-async def answer_endpoint(request: Request) -> JSONResponse:
+async def answer_endpoint(
+    request: Request,
+    user: CurrentUserContext = Depends(require_password_ready_user),
+) -> JSONResponse:
     """Run RAG answer generation against the indexed corpus.
 
     Body is parsed manually so an empty ``query`` surfaces as ``400``
@@ -150,6 +205,14 @@ async def answer_endpoint(request: Request) -> JSONResponse:
     try:
         body = await request.json()
     except Exception:
+        _log_rag(
+            request=request,
+            user_id=user.id,
+            parsed=None,
+            result="FAIL",
+            response=None,
+            error_message="Invalid JSON body",
+        )
         return JSONResponse(
             status_code=400,
             content={
@@ -159,6 +222,14 @@ async def answer_endpoint(request: Request) -> JSONResponse:
         )
 
     if not isinstance(body, dict):
+        _log_rag(
+            request=request,
+            user_id=user.id,
+            parsed=None,
+            result="FAIL",
+            response=None,
+            error_message="Body must be a JSON object",
+        )
         return JSONResponse(
             status_code=400,
             content={
@@ -171,7 +242,23 @@ async def answer_endpoint(request: Request) -> JSONResponse:
         parsed = AnswerRequest.model_validate(body)
     except ValidationError as exc:
         if _looks_like_empty_query(exc):
+            _log_rag(
+                request=request,
+                user_id=user.id,
+                parsed=None,
+                result="FAIL",
+                response=None,
+                error_message="Search query is required",
+            )
             return _query_required_resp()
+        _log_rag(
+            request=request,
+            user_id=user.id,
+            parsed=None,
+            result="FAIL",
+            response=None,
+            error_message="Invalid request body",
+        )
         return JSONResponse(
             status_code=422,
             content={
@@ -184,18 +271,74 @@ async def answer_endpoint(request: Request) -> JSONResponse:
     try:
         response: AnswerResponse = run_answer(settings, parsed)
     except DataSourceNotFound:
+        _log_rag(
+            request=request,
+            user_id=user.id,
+            parsed=parsed,
+            result="FAIL",
+            response=None,
+            error_message="Data source not found",
+        )
         return _data_source_not_found_resp()
     except EmbeddingFailure as exc:
+        _log_rag(
+            request=request,
+            user_id=user.id,
+            parsed=parsed,
+            result="FAIL",
+            response=None,
+            error_message=exc.message,
+        )
         return _embedding_failure_resp(exc)
     except SearchDatabaseError as exc:
+        _log_rag(
+            request=request,
+            user_id=user.id,
+            parsed=parsed,
+            result="FAIL",
+            response=None,
+            error_message=str(exc),
+        )
         return _db_failure_resp(exc)
     except LLMFailure as exc:
+        _log_rag(
+            request=request,
+            user_id=user.id,
+            parsed=parsed,
+            result="FAIL",
+            response=None,
+            error_message=exc.message,
+        )
         return _llm_failure_resp(exc)
     except ContextBuildError as exc:
+        _log_rag(
+            request=request,
+            user_id=user.id,
+            parsed=parsed,
+            result="FAIL",
+            response=None,
+            error_message=str(exc),
+        )
         return _context_build_resp(exc)
     except Exception as exc:  # pragma: no cover - defensive
+        _log_rag(
+            request=request,
+            user_id=user.id,
+            parsed=parsed,
+            result="FAIL",
+            response=None,
+            error_message=str(exc),
+        )
         return _generic_err_resp(exc)
 
+    _log_rag(
+        request=request,
+        user_id=user.id,
+        parsed=parsed,
+        result="SUCCESS",
+        response=response,
+        error_message=None,
+    )
     return JSONResponse(
         status_code=200,
         content=response.model_dump(mode="json"),

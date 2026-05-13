@@ -11,16 +11,20 @@ via the Step-12 processor, slices the resulting ``extracted_text`` into
 ``document_chunks.embedding vector(1024)`` via the Step-14 embedder
 (bumping ``files.last_indexed_at`` once every chunk of that file has a
 non-``NULL`` vector). No retrieval / RAG / search at this stage.
+
+Step 20: all routes require an **ACTIVE** administrator who has cleared
+``must_change_password`` (see :func:`app.core.auth_dependencies.require_admin_user`).
 """
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
+from app.core.auth_dependencies import CurrentUserContext, require_admin_user
 from app.core.config import settings
 from app.schemas.data_source import (
     DataSourceCreate,
@@ -29,6 +33,7 @@ from app.schemas.data_source import (
     DataSourceUpdate,
     SourceType,
 )
+from app.services.action_log_service import write_action_log_safe
 from app.services.data_source_service import (
     DataSourceBadRequest,
     DataSourceConflict,
@@ -54,7 +59,11 @@ from app.webdav.connection_test import run_webdav_connection_test
 from app.webdav.listing import run_webdav_root_listing
 
 
-router = APIRouter(prefix="/api/data-sources", tags=["data-sources"])
+router = APIRouter(
+    prefix="/api/data-sources",
+    tags=["data-sources"],
+    dependencies=[Depends(require_admin_user)],
+)
 
 
 def _not_found_resp() -> JSONResponse:
@@ -94,6 +103,44 @@ def _srv_err_resp(exc: Exception) -> JSONResponse:
     )
 
 
+def _op_result(code: int, payload: dict[str, Any] | None) -> str:
+    if code >= 400:
+        return "FAIL"
+    if isinstance(payload, dict) and str(payload.get("status", "")).lower() == "error":
+        return "FAIL"
+    return "SUCCESS"
+
+
+def _ds_brief(resp: DataSourceResponse) -> dict[str, Any]:
+    return {
+        "data_source_id": str(resp.id),
+        "name": resp.name,
+        "source_type": resp.source_type,
+        "is_active": resp.is_active,
+    }
+
+
+def _log_op(
+    *,
+    request: Request,
+    admin: CurrentUserContext,
+    action_type: str,
+    data_source_id: UUID | None,
+    result: str,
+    detail: dict[str, Any] | None,
+    error_message: str | None,
+) -> None:
+    write_action_log_safe(
+        user_id=admin.id,
+        action_type=action_type,
+        result=result,
+        request=request,
+        data_source_id=data_source_id,
+        detail=detail,
+        error_message=error_message,
+    )
+
+
 @router.get("", response_model=None)
 def list_data_sources(
     include_inactive: Annotated[bool, Query()] = False,
@@ -113,19 +160,53 @@ def list_data_sources(
 
 
 @router.post("/{data_source_id}/test-connection", response_model=None)
-def test_data_source_webdav_connection(data_source_id: UUID) -> JSONResponse:
+def test_data_source_webdav_connection(
+    request: Request,
+    data_source_id: UUID,
+    admin: CurrentUserContext = Depends(require_admin_user),
+) -> JSONResponse:
     try:
         payload, code = run_webdav_connection_test(settings, data_source_id)
+        body = payload if isinstance(payload, dict) else None
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_TEST_CONNECTION",
+            data_source_id=data_source_id,
+            result=_op_result(code, body),
+            detail={"http_status": code},
+            error_message=(body or {}).get("message") if isinstance(body, dict) else None,
+        )
         return JSONResponse(status_code=code, content=payload)
     except datasource_svc.DataSourceNotFound:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_TEST_CONNECTION",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message="Data source not found",
+        )
         return _not_found_resp()
     except Exception as exc:  # pragma: no cover
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_TEST_CONNECTION",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc),
+        )
         return _srv_err_resp(exc)
 
 
 @router.post("/{data_source_id}/list-root", response_model=None)
 def list_data_source_webdav_root(
+    request: Request,
     data_source_id: UUID,
+    admin: CurrentUserContext = Depends(require_admin_user),
     limit: Annotated[int, Query(ge=1, le=5000)] = 200,
     include_hidden: Annotated[bool, Query()] = False,
 ) -> JSONResponse:
@@ -140,10 +221,38 @@ def list_data_source_webdav_root(
             limit=limit,
             include_hidden=include_hidden,
         )
+        body = payload if isinstance(payload, dict) else None
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="WEBDAV_LIST_ROOT",
+            data_source_id=data_source_id,
+            result=_op_result(code, body),
+            detail={"limit": limit, "include_hidden": include_hidden},
+            error_message=(body or {}).get("message") if isinstance(body, dict) else None,
+        )
         return JSONResponse(status_code=code, content=payload)
     except datasource_svc.DataSourceNotFound:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="WEBDAV_LIST_ROOT",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message="Data source not found",
+        )
         return _not_found_resp()
     except Exception as exc:  # pragma: no cover
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="WEBDAV_LIST_ROOT",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc),
+        )
         return _srv_err_resp(exc)
 
 
@@ -174,7 +283,9 @@ def get_data_source_file_stats(
 
 @router.post("/{data_source_id}/sync-root", response_model=None)
 def sync_data_source_webdav_root(
+    request: Request,
     data_source_id: UUID,
+    admin: CurrentUserContext = Depends(require_admin_user),
     limit: Annotated[int, Query(ge=1, le=10000)] = 1000,
     include_hidden: Annotated[bool, Query()] = False,
 ) -> JSONResponse:
@@ -191,16 +302,46 @@ def sync_data_source_webdav_root(
             limit=limit,
             include_hidden=include_hidden,
         )
+        body = payload if isinstance(payload, dict) else None
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="WEBDAV_SYNC_ROOT",
+            data_source_id=data_source_id,
+            result=_op_result(code, body),
+            detail={"limit": limit, "include_hidden": include_hidden},
+            error_message=(body or {}).get("message") if isinstance(body, dict) else None,
+        )
         return JSONResponse(status_code=code, content=payload)
     except datasource_svc.DataSourceNotFound:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="WEBDAV_SYNC_ROOT",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message="Data source not found",
+        )
         return _not_found_resp()
     except Exception as exc:  # pragma: no cover
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="WEBDAV_SYNC_ROOT",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc),
+        )
         return _srv_err_resp(exc)
 
 
 @router.post("/{data_source_id}/sync-tree", response_model=None)
 def sync_data_source_webdav_tree(
+    request: Request,
     data_source_id: UUID,
+    admin: CurrentUserContext = Depends(require_admin_user),
     start_path: Annotated[str, Query()] = "/",
     max_depth: Annotated[int, Query(ge=0, le=20)] = 3,
     max_items: Annotated[int, Query(ge=1, le=50000)] = 5000,
@@ -232,16 +373,53 @@ def sync_data_source_webdav_tree(
             apply_exclusions=apply_exclusions,
             detect_deleted=detect_deleted,
         )
+        body = payload if isinstance(payload, dict) else None
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="WEBDAV_SYNC_TREE",
+            data_source_id=data_source_id,
+            result=_op_result(code, body),
+            detail={
+                "start_path": start_path,
+                "max_depth": max_depth,
+                "max_items": max_items,
+                "include_hidden": include_hidden,
+                "apply_exclusions": apply_exclusions,
+                "detect_deleted": detect_deleted,
+            },
+            error_message=(body or {}).get("message") if isinstance(body, dict) else None,
+        )
         return JSONResponse(status_code=code, content=payload)
     except datasource_svc.DataSourceNotFound:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="WEBDAV_SYNC_TREE",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message="Data source not found",
+        )
         return _not_found_resp()
     except Exception as exc:  # pragma: no cover
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="WEBDAV_SYNC_TREE",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc),
+        )
         return _srv_err_resp(exc)
 
 
 @router.post("/{data_source_id}/process-pending-text", response_model=None)
 def process_data_source_pending_text(
+    request: Request,
     data_source_id: UUID,
+    admin: CurrentUserContext = Depends(require_admin_user),
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     max_file_size_bytes: Annotated[int, Query(ge=1, le=268_435_456)] = 5_242_880,
     include_extensions: Annotated[str | None, Query()] = None,
@@ -267,16 +445,46 @@ def process_data_source_pending_text(
             include_extensions=ext_set,
             dry_run=dry_run,
         )
+        body = payload if isinstance(payload, dict) else None
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="PROCESS_PENDING_TEXT",
+            data_source_id=data_source_id,
+            result=_op_result(code, body),
+            detail={"limit": limit, "dry_run": dry_run},
+            error_message=(body or {}).get("message") if isinstance(body, dict) else None,
+        )
         return JSONResponse(status_code=code, content=payload)
     except datasource_svc.DataSourceNotFound:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="PROCESS_PENDING_TEXT",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message="Data source not found",
+        )
         return _not_found_resp()
     except Exception as exc:  # pragma: no cover
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="PROCESS_PENDING_TEXT",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc),
+        )
         return _srv_err_resp(exc)
 
 
 @router.post("/{data_source_id}/chunk-completed-text", response_model=None)
 def chunk_data_source_completed_text(
+    request: Request,
     data_source_id: UUID,
+    admin: CurrentUserContext = Depends(require_admin_user),
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     chunk_size: Annotated[int, Query(ge=200, le=10_000)] = 1200,
     chunk_overlap: Annotated[int, Query(ge=0, le=9_999)] = 200,
@@ -307,10 +515,43 @@ def chunk_data_source_completed_text(
             dry_run=dry_run,
             include_extensions=ext_set,
         )
+        body = payload if isinstance(payload, dict) else None
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="CHUNK_COMPLETED_TEXT",
+            data_source_id=data_source_id,
+            result=_op_result(code, body),
+            detail={
+                "limit": limit,
+                "chunk_size": chunk_size,
+                "dry_run": dry_run,
+                "reprocess": reprocess,
+            },
+            error_message=(body or {}).get("message") if isinstance(body, dict) else None,
+        )
         return JSONResponse(status_code=code, content=payload)
     except datasource_svc.DataSourceNotFound:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="CHUNK_COMPLETED_TEXT",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message="Data source not found",
+        )
         return _not_found_resp()
     except InvalidChunkParameters as exc:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="CHUNK_COMPLETED_TEXT",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc.error),
+        )
         return JSONResponse(
             status_code=400,
             content={
@@ -320,12 +561,23 @@ def chunk_data_source_completed_text(
             },
         )
     except Exception as exc:  # pragma: no cover
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="CHUNK_COMPLETED_TEXT",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc),
+        )
         return _srv_err_resp(exc)
 
 
 @router.post("/{data_source_id}/embed-pending-chunks", response_model=None)
 def embed_data_source_pending_chunks(
+    request: Request,
     data_source_id: UUID,
+    admin: CurrentUserContext = Depends(require_admin_user),
     limit: Annotated[int, Query(ge=1, le=5000)] = 500,
     batch_size: Annotated[int, Query(ge=1, le=128)] = 32,
     include_extensions: Annotated[str | None, Query()] = None,
@@ -361,10 +613,44 @@ def embed_data_source_pending_chunks(
             file_id=file_id,
             dry_run=dry_run,
         )
+        body = payload if isinstance(payload, dict) else None
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="EMBED_PENDING_CHUNKS",
+            data_source_id=data_source_id,
+            result=_op_result(code, body),
+            detail={
+                "limit": limit,
+                "batch_size": batch_size,
+                "dry_run": dry_run,
+                "reembed": reembed,
+                "file_id": str(file_id) if file_id else None,
+            },
+            error_message=(body or {}).get("message") if isinstance(body, dict) else None,
+        )
         return JSONResponse(status_code=code, content=payload)
     except datasource_svc.DataSourceNotFound:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="EMBED_PENDING_CHUNKS",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message="Data source not found",
+        )
         return _not_found_resp()
     except FileNotInDataSource:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="EMBED_PENDING_CHUNKS",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail={"file_id": str(file_id) if file_id else None},
+            error_message="File not found in data source",
+        )
         return JSONResponse(
             status_code=404,
             content={
@@ -373,6 +659,15 @@ def embed_data_source_pending_chunks(
             },
         )
     except Exception as exc:  # pragma: no cover
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="EMBED_PENDING_CHUNKS",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc),
+        )
         return _srv_err_resp(exc)
 
 
@@ -388,55 +683,208 @@ def get_data_source(data_source_id: UUID) -> DataSourceResponse | JSONResponse:
 
 
 @router.post("", status_code=201, response_model=None)
-def create_data_source(body: DataSourceCreate) -> DataSourceResponse | JSONResponse:
+def create_data_source(
+    request: Request,
+    body: DataSourceCreate,
+    admin: CurrentUserContext = Depends(require_admin_user),
+) -> DataSourceResponse | JSONResponse:
     try:
         payload = datasource_svc.create_data_source(settings=settings, body=body)
-        return DataSourceResponse.model_validate(payload)
+        resp = DataSourceResponse.model_validate(payload)
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_CREATE",
+            data_source_id=resp.id,
+            result="SUCCESS",
+            detail=_ds_brief(resp),
+            error_message=None,
+        )
+        return resp
     except DataSourceConflict as exc:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_CREATE",
+            data_source_id=None,
+            result="FAIL",
+            detail={"name": body.name},
+            error_message=str(exc).strip() or "Conflict",
+        )
         return _conflict_resp(exc)
     except DataSourceBadRequest as exc:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_CREATE",
+            data_source_id=None,
+            result="FAIL",
+            detail={"name": body.name},
+            error_message=exc.message,
+        )
         return _bad_req_resp(exc.message, exc.error)
     except Exception as exc:  # pragma: no cover
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_CREATE",
+            data_source_id=None,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc),
+        )
         return _srv_err_resp(exc)
 
 
 @router.put("/{data_source_id}", response_model=None)
 def update_data_source(
+    request: Request,
     data_source_id: UUID,
     body: DataSourceUpdate,
+    admin: CurrentUserContext = Depends(require_admin_user),
 ) -> DataSourceResponse | JSONResponse:
     try:
         payload = datasource_svc.update_data_source(
             settings=settings, ds_id=data_source_id, body=body
         )
-        return DataSourceResponse.model_validate(payload)
+        resp = DataSourceResponse.model_validate(payload)
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_UPDATE",
+            data_source_id=data_source_id,
+            result="SUCCESS",
+            detail=_ds_brief(resp),
+            error_message=None,
+        )
+        return resp
     except DataSourceNotFound:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_UPDATE",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message="Data source not found",
+        )
         return _not_found_resp()
     except DataSourceConflict as exc:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_UPDATE",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc).strip() or "Conflict",
+        )
         return _conflict_resp(exc)
     except DataSourceBadRequest as exc:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_UPDATE",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=exc.message,
+        )
         return _bad_req_resp(exc.message, exc.error)
     except Exception as exc:  # pragma: no cover
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_UPDATE",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc),
+        )
         return _srv_err_resp(exc)
 
 
 @router.patch("/{data_source_id}/deactivate", response_model=None)
-def deactivate_data_source(data_source_id: UUID) -> DataSourceResponse | JSONResponse:
+def deactivate_data_source(
+    request: Request,
+    data_source_id: UUID,
+    admin: CurrentUserContext = Depends(require_admin_user),
+) -> DataSourceResponse | JSONResponse:
     try:
         payload = datasource_svc.set_active(ds_id=data_source_id, is_active=False)
-        return DataSourceResponse.model_validate(payload)
+        resp = DataSourceResponse.model_validate(payload)
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_DEACTIVATE",
+            data_source_id=data_source_id,
+            result="SUCCESS",
+            detail=_ds_brief(resp),
+            error_message=None,
+        )
+        return resp
     except DataSourceNotFound:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_DEACTIVATE",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message="Data source not found",
+        )
         return _not_found_resp()
     except Exception as exc:  # pragma: no cover
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_DEACTIVATE",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc),
+        )
         return _srv_err_resp(exc)
 
 
 @router.patch("/{data_source_id}/activate", response_model=None)
-def activate_data_source(data_source_id: UUID) -> DataSourceResponse | JSONResponse:
+def activate_data_source(
+    request: Request,
+    data_source_id: UUID,
+    admin: CurrentUserContext = Depends(require_admin_user),
+) -> DataSourceResponse | JSONResponse:
     try:
         payload = datasource_svc.set_active(ds_id=data_source_id, is_active=True)
-        return DataSourceResponse.model_validate(payload)
+        resp = DataSourceResponse.model_validate(payload)
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_ACTIVATE",
+            data_source_id=data_source_id,
+            result="SUCCESS",
+            detail=_ds_brief(resp),
+            error_message=None,
+        )
+        return resp
     except DataSourceNotFound:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_ACTIVATE",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message="Data source not found",
+        )
         return _not_found_resp()
     except Exception as exc:  # pragma: no cover
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="DATA_SOURCE_ACTIVATE",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc),
+        )
         return _srv_err_resp(exc)

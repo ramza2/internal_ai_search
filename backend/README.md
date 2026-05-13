@@ -20,7 +20,8 @@ This backend follows a phased roadmap. Implemented so far:
 - **Step 16:** RAG answer API (`POST /api/answer`) — reuses the Step-15 search pipeline to retrieve top-K chunks, builds a structured Korean prompt that pins the model to the retrieved context (with prompt-injection neutralization), calls Ollama `/api/generate` against the configured `OLLAMA_MODEL` (`gemma3`), and returns `answer` + `citations` (citations are always drawn from the actual search result, never from anything the model emitted). When no chunk clears `answer_min_score` the LLM is **not** called — a fixed "근거 부족" reply is returned together with sub-threshold citations. `dry_run=true` builds the would-be context preview without calling the LLM. **No chat sessions, no conversation history, no streaming, no hybrid keyword search.**
 - **Step 17:** Hybrid keyword search — `POST /api/search` gains a `search_mode` knob (`vector` *(default, unchanged)* / `keyword` / `hybrid`). `keyword` runs an `ILIKE` candidate fetch over `files.filename`, `files.remote_path`, and `document_chunks.chunk_text` **without** calling Ollama, scores each row in Python (phrase + token bonuses, clamped at 1.0, with `match_reasons` like `FILENAME_MATCH` / `CHUNK_TOKEN_MATCH`), and returns the top-K. `hybrid` runs both paths against bounded candidate pools (`vector_candidate_limit` / `keyword_candidate_limit`, default 50 each), merges by `chunk_id`, and ranks by `final_score = (vector_weight·vector_score + keyword_weight·keyword_score) / (vector_weight + keyword_weight)`. `POST /api/answer` accepts the same `search_mode` and forwards it to the underlying search call, so RAG can now reuse hybrid retrieval without any prompt changes. `chunk_text` is still never returned. **No PostgreSQL full-text search, no BM25, no cross-encoder reranker, no prompt changes.**
 - **Step 18:** File / chunk preview — `GET /api/files/{file_id}/preview` and `GET /api/files/{file_id}/chunks/{chunk_id}/preview` return metadata plus a **bounded** (`max_chars`) line-numbered slice of `file_contents.extracted_text` for UI click-through from search / RAG citations. Optional `query` adds offset-only highlights (no HTML). `open_info` carries credential-free WebDAV URL parts. **No** WebDAV download, file mutation, or RBAC yet.
-- **Step 19:** Auth + admin users — `POST /api/auth/signup` (PENDING user), `POST /api/auth/login` (JWT for ACTIVE only), `GET /api/auth/me`, `POST /api/auth/change-password`, and admin-only `GET/PATCH /api/admin/users/...` (approve, activate, deactivate, lock, role). Startup bootstraps the first `ADMIN` from `INITIAL_ADMIN_*` when none exists (`must_change_password=true`). Dependencies: `bcrypt`, `PyJWT`. **No** SSO/LDAP, email verify, MFA, or auth on existing search/RAG/data-source routes yet (planned gradual rollout).
+- **Step 19:** Auth + admin users — `POST /api/auth/signup` (PENDING user), `POST /api/auth/login` (JWT for ACTIVE only), `GET /api/auth/me`, `POST /api/auth/change-password`, and admin-only `GET/PATCH /api/admin/users/...` (approve, activate, deactivate, lock, role). Startup bootstraps the first `ADMIN` from `INITIAL_ADMIN_*` when none exists (`must_change_password=true`). Dependencies: `bcrypt`, `PyJWT`. **No** SSO/LDAP, email verify, MFA, or refresh tokens yet.
+- **Step 20:** RBAC on existing APIs + `action_logs` audit (1st pass) — `POST /api/search`, `POST /api/answer`, and file preview routes require a logged-in user with `must_change_password=false`; all `/api/data-sources/*`, `GET /api/files/stats`, `GET /api/data-sources/{id}/file-stats`, `/api/admin/users/*`, and `GET /api/admin/action-logs` require **ACTIVE** **ADMIN** with password change cleared. Health + `POST /api/auth/signup` + `POST /api/auth/login` stay public. Best-effort writes to `action_logs` (`db/migrations/020_action_logs.sql`) for auth, search, RAG, preview, admin user actions, and data-source operations; **no** secrets or full LLM bodies in `detail`. Admin log viewer records `ACTION_LOG_VIEW` with minimal filter metadata.
 
 ## Project structure
 
@@ -33,7 +34,8 @@ backend/
 │  │  ├─ auth_dependencies.py
 │  │  ├─ jwt_tokens.py
 │  │  ├─ password.py
-│  │  └─ security.py
+│  │  ├─ security.py
+│  │  └─ request_context.py
 │  ├─ db/
 │  │  ├─ database.py
 │  │  ├─ health.py
@@ -54,6 +56,7 @@ backend/
 │  │  ├─ listing.py
 │  │  └─ recursive_listing.py
 │  ├─ api/
+│  │  ├─ admin_action_logs.py
 │  │  ├─ admin_users.py
 │  │  ├─ answer.py
 │  │  ├─ auth.py
@@ -62,6 +65,7 @@ backend/
 │  │  ├─ health.py
 │  │  └─ search.py
 │  ├─ services/
+│  │  ├─ action_log_service.py
 │  │  ├─ admin_users_service.py
 │  │  ├─ auth_bootstrap_service.py
 │  │  ├─ auth_service.py
@@ -99,7 +103,8 @@ backend/
 │     └─ search.py
 ├─ db/
 │  └─ migrations/
-│     └─ 019_app_users.sql
+│     ├─ 019_app_users.sql
+│     └─ 020_action_logs.sql
 ├─ requirements.txt
 ├─ .env   (local only; gitignored — create next to this README)
 └─ README.md
@@ -967,37 +972,53 @@ Search (`POST /api/search`) and RAG (`POST /api/answer`) already return `file_id
 
 **`file.open_info`:** `data_source_id`, `server_url`, `webdav_root_path`, `remote_path`, `webdav_url` (from `build_file_url`, credential-free).
 
-**RBAC:** no authentication yet — anyone who knows a `file_id` can call preview; add ACL checks after login lands.
+**RBAC (Step 20):** preview routes require `Authorization: Bearer` for an **ACTIVE** user with `must_change_password=false`. Statistics endpoints require **ADMIN**.
 
 ```bash
-curl "http://localhost:8000/api/files/{file_id}/preview"
+curl "http://localhost:8000/api/files/{file_id}/preview" \
+  -H "Authorization: Bearer <token>"
 
-curl "http://localhost:8000/api/files/{file_id}/preview?start_line=100&end_line=150&context_lines=10"
+curl "http://localhost:8000/api/files/{file_id}/preview?start_line=100&end_line=150&context_lines=10" \
+  -H "Authorization: Bearer <token>"
 
-curl "http://localhost:8000/api/files/{file_id}/preview?chunk_id={chunk_id}&query=JWT"
+curl "http://localhost:8000/api/files/{file_id}/preview?chunk_id={chunk_id}&query=JWT" \
+  -H "Authorization: Bearer <token>"
 
-curl "http://localhost:8000/api/files/{file_id}/chunks/{chunk_id}/preview?context_lines=20&query=JWT"
+curl "http://localhost:8000/api/files/{file_id}/chunks/{chunk_id}/preview?context_lines=20&query=JWT" \
+  -H "Authorization: Bearer <token>"
 ```
 
-### Authentication & admin users (Step 19)
+### Authentication & admin users (Steps 19–20)
 
 **Schema:** `app_users` with `user_role` (`USER`, `ADMIN`) and `user_status` (`PENDING`, `ACTIVE`, `INACTIVE`, `LOCKED`). Apply `db/migrations/019_app_users.sql` once if the table does not exist.
 
+**Audit schema (Step 20):** `action_logs` + enum `action_result` (`SUCCESS`, `FAIL`). Apply `db/migrations/020_action_logs.sql` once. Inserts are **best-effort** — if the table is missing or a write fails, the API response is **unchanged**.
+
 **Initial admin:** On application startup, if **no** row with `role = ADMIN` exists, the server inserts one admin from `INITIAL_ADMIN_*` env vars (`must_change_password=true`, `status=ACTIVE`). If `INITIAL_ADMIN_PASSWORD` is empty, bootstrap is skipped (warning log). Failures are **non-fatal** — the API still starts (e.g. missing table in early dev).
 
-**Signup:** `POST /api/auth/signup` creates `USER` + `PENDING`; duplicate `login_id` → **409**. PENDING users **cannot** log in (**403**).
+**Signup:** `POST /api/auth/signup` creates `USER` + `PENDING`; duplicate `login_id` → **409**. PENDING users **cannot** log in (**403**). Logged as `SIGNUP` (no password in `detail`).
 
-**Login:** `POST /api/auth/login` — only `ACTIVE` users receive a JWT (`HS256`, `sub` = user UUID). Wrong credentials → **401** (generic message). `PENDING` → **403** `"Account is pending approval"`. `INACTIVE` / `LOCKED` → **403**.
+**Login:** `POST /api/auth/login` — only `ACTIVE` users receive a JWT (`HS256`, `sub` = user UUID). Wrong credentials → **401** (generic message). `PENDING` → **403** `"Account is pending approval"`. `INACTIVE` / `LOCKED` → **403**. Success → `LOGIN`; failures → `LOGIN_FAILED` with `detail.login_id` only.
 
-**JWT:** Send `Authorization: Bearer <access_token>` to `GET /api/auth/me` and `POST /api/auth/change-password`. Expiry: `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` (default 720). Invalid/expired token → **401**. Non-`ACTIVE` user with a still-valid token → **403** on `/me`.
+**JWT:** Send `Authorization: Bearer <access_token>` to protected routes. Expiry: `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` (default 720). Missing token → **401** `{"status":"error","message":"Authentication required"}`. Invalid/expired token → **401** `"Invalid or expired token"`. Non-`ACTIVE` user with a still-valid token → **403** on dependencies.
 
-**Password policy:** `PASSWORD_MIN_LENGTH` (default 8); bcrypt truncates at 72 bytes (longer passwords rejected).
+**`must_change_password` (Step 20):** While `true`, the user may call only `GET /api/auth/me` and `POST /api/auth/change-password`. Any other authenticated route that requires a “ready” user returns **403** `"Password change is required before using this feature"`. Admin routes use the same gate (admin must clear the flag too).
 
-**Admin APIs:** `GET /api/admin/users` and `PATCH .../approve|deactivate|lock|activate|role` require **`ACTIVE` + `ADMIN`**. Query filters: `status`, `role`, `keyword`, `limit` (≤200), `offset`.
+**Password policy:** `PASSWORD_MIN_LENGTH` (default 8); bcrypt truncates at 72 bytes (longer passwords rejected). `PASSWORD_CHANGE` actions are logged without password fields.
+
+**Admin APIs:** `GET /api/admin/users` and `PATCH .../approve|deactivate|lock|activate|role` require **`ACTIVE` + `ADMIN` + `must_change_password=false`**. Query filters: `status`, `role`, `keyword`, `limit` (≤200), `offset`. Each mutating PATCH emits `USER_APPROVE`, `USER_DEACTIVATE`, `USER_LOCK`, `USER_ACTIVATE`, or `USER_ROLE_CHANGE`.
+
+**Admin audit viewer:** `GET /api/admin/action-logs` — same admin gate. Query: `user_id`, `action_type`, `result` (`SUCCESS`|`FAIL`), `data_source_id`, `target_file_id`, `keyword` (ILIKE on `search_query`, `target_file_path`, `detail::text`), `from_date`, `to_date` (ISO datetime or `YYYY-MM-DD`), `limit` (default 50, max 200), `offset`. Each successful listing appends an `ACTION_LOG_VIEW` row with **compact** `detail.filters` (no raw keyword text). Listing failures return **500**.
+
+**Data sources (Step 20):** All `/api/data-sources/*` routes require **ACTIVE ADMIN** with password change cleared. **No** credential material or `Authorization` header is written to `action_logs`.
+
+**Search / RAG / preview (Step 20):** `POST /api/search`, `POST /api/answer`, and both preview URLs require **ACTIVE** JWT user with **`must_change_password=false`**. Successful search emits `SEARCH` with `search_query`, counts, and mode metadata (no full chunk text). RAG emits `RAG_QUESTION` with retrieval/LLM metadata only (no prompt, no answer body). Preview emits `FILE_PREVIEW` with `target_file_id` / path and window parameters (no `preview.text`).
+
+**Sensitive data — never stored in `action_logs`:** passwords, JWT/access tokens, `Authorization` headers, WebDAV credentials, `credential_secret_enc`, full `chunk_text` / `extracted_text`, full LLM prompts, full RAG answers, or preview bodies. `error_message` is passed through a sanitizer that redacts obvious secret-bearing strings.
 
 **Last-admin guard:** Deactivate, lock, or demote (`role` → `USER`) the **sole** `ACTIVE` `ADMIN` → **400** `"Cannot remove the last active administrator from the system"`.
 
-**Not in this step:** SSO/LDAP, email verification, MFA, password reset email, `action_logs`, ownCloud ACL sync, **enforcing auth on** `POST /api/search`, `POST /api/answer`, `GET /api/files/.../preview`, or data-source sync routes — those will be wired via `require_active_user` / `require_admin_user` in a follow-up milestone.
+**Not in Step 20:** refresh tokens, SSO/LDAP, email verification, MFA, password reset email, per-user ownCloud ACL on search results.
 
 **Production checklist — change before go-live:**
 
@@ -1038,9 +1059,27 @@ curl -X POST "http://localhost:8000/api/auth/change-password" \
 
 curl -X PATCH "http://localhost:8000/api/admin/users/{user_id}/approve" \
   -H "Authorization: Bearer <admin-token>"
+
+# Logged-in search (Step 20)
+curl -X POST "http://localhost:8000/api/search" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "JWT 토큰 생성",
+    "search_mode": "hybrid",
+    "limit": 10
+  }'
+
+# Admin: data sources
+curl "http://localhost:8000/api/data-sources" \
+  -H "Authorization: Bearer <admin-token>"
+
+# Admin: audit log listing
+curl "http://localhost:8000/api/admin/action-logs?limit=50" \
+  -H "Authorization: Bearer <admin-token>"
 ```
 
 ## Notes
 
-- Steps 1–19 wire health checks, pgvector smoke tests, credential-safe data-source CRUD, a **minimal** DAV probe, **one-level** WebDAV previews and sync, a read-only **file statistics** endpoint, a **bounded recursive** WebDAV sync (BFS, Depth:1 per folder, `max_depth` / `max_items`) with **`exclusion_policies`** applied, **opt-in soft-mark deletion detection** for that recursive sync, **PENDING text-file download + plain-text extraction** into `file_contents`, **character-based chunking** into `document_chunks`, the **chunk-embedding pass** that fills `document_chunks.embedding vector(1024)` and bumps `files.last_indexed_at` once a file is fully embedded, a **vector + hybrid keyword search API** (`POST /api/search`), a **RAG answer API** (`POST /api/answer`), **file / chunk preview** (`GET /api/files/{file_id}/preview`, …), and **JWT auth + signup/approval + admin user management** (`/api/auth/*`, `/api/admin/users/*`, initial admin bootstrap) — **without** yet requiring a token on search/RAG/preview/data-source routes (that is deferred so integration tests stay simple until the UI lands).
+- Steps 1–20 wire health checks, pgvector smoke tests, credential-safe data-source CRUD, a **minimal** DAV probe, **one-level** WebDAV previews and sync, a read-only **file statistics** endpoint, a **bounded recursive** WebDAV sync (BFS, Depth:1 per folder, `max_depth` / `max_items`) with **`exclusion_policies`** applied, **opt-in soft-mark deletion detection** for that recursive sync, **PENDING text-file download + plain-text extraction** into `file_contents`, **character-based chunking** into `document_chunks`, the **chunk-embedding pass** that fills `document_chunks.embedding vector(1024)` and bumps `files.last_indexed_at` once a file is fully embedded, a **vector + hybrid keyword search API** (`POST /api/search`), a **RAG answer API** (`POST /api/answer`), **file / chunk preview** (`GET /api/files/{file_id}/preview`, …), **JWT auth + signup/approval + admin user management** (`/api/auth/*`, `/api/admin/users/*`, initial admin bootstrap), and **Step 20 RBAC + `action_logs` auditing** (password-ready users for search/RAG/preview; admins for data sources + file stats + audit viewer) — **without** refresh tokens, SSO, email verify, MFA, or streaming RAG.
 - Structure is kept small for later ingestion, delta sync, scheduling, Docker Compose packaging, React admin screens, and chat APIs. Search-side follow-ups under consideration: a **`pg_trgm` GIN index** on `lower(filename)` / `lower(remote_path)` so the keyword candidate fetch scales beyond ~10k chunks per source; a **PostgreSQL full-text search (`tsvector` + `to_tsquery`) column** layered alongside `chunk_text` so the keyword scorer can use language-aware lexemes instead of `ILIKE`; a **BM25** scorer (e.g. `pg_search` or an in-process re-ranker) for the keyword side; and an optional **cross-encoder reranker** that re-orders the top-N of a hybrid run.

@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
+from app.api.admin_action_logs import router as admin_action_logs_router
 from app.api.admin_users import router as admin_users_router
 from app.api.answer import router as answer_router
 from app.api.auth import router as auth_router
@@ -27,7 +29,26 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
+    """Return flat ``{status, message}`` bodies for dependency auth errors."""
+    detail = exc.detail
+    if isinstance(detail, dict) and detail.get("status") == "error":
+        return JSONResponse(status_code=exc.status_code, content=detail)
+    if isinstance(detail, str):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"status": "error", "message": detail},
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"status": "error", "message": str(detail)},
+    )
+
+
 app.include_router(health_router, tags=["health"])
+app.include_router(admin_action_logs_router)
 app.include_router(auth_router)
 app.include_router(admin_users_router)
 app.include_router(data_sources_router)

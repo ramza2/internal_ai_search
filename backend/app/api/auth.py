@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+import uuid
+
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from app.core.auth_dependencies import CurrentUserContext, get_current_user
@@ -12,6 +14,7 @@ from app.schemas.auth import (
     SignupRequest,
     user_jsonable,
 )
+from app.services.action_log_service import write_action_log_safe
 from app.services.auth_service import AuthServiceError, change_password, login, me_dict, signup
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -25,7 +28,7 @@ def _auth_err(status_code: int, message: str) -> JSONResponse:
 
 
 @router.post("/signup", response_model=None)
-def auth_signup(body: SignupRequest) -> JSONResponse:
+def auth_signup(request: Request, body: SignupRequest) -> JSONResponse:
     try:
         user = signup(
             login_id=body.login_id,
@@ -35,9 +38,47 @@ def auth_signup(body: SignupRequest) -> JSONResponse:
             department=body.department,
         )
     except AuthServiceError as exc:
+        write_action_log_safe(
+            user_id=None,
+            action_type="SIGNUP",
+            result="FAIL",
+            request=request,
+            detail={
+                "login_id": body.login_id,
+                "email": body.email,
+                "department": body.department,
+                "status": "PENDING",
+            },
+            error_message=exc.message,
+        )
         return _auth_err(exc.status_code, exc.message)
     except Exception as exc:  # pragma: no cover
+        write_action_log_safe(
+            user_id=None,
+            action_type="SIGNUP",
+            result="FAIL",
+            request=request,
+            detail={
+                "login_id": body.login_id,
+                "email": body.email,
+                "department": body.department,
+                "status": "unknown",
+            },
+            error_message=str(exc),
+        )
         return _auth_err(500, str(exc))
+    write_action_log_safe(
+        user_id=None,
+        action_type="SIGNUP",
+        result="SUCCESS",
+        request=request,
+        detail={
+            "login_id": user["login_id"],
+            "email": user.get("email"),
+            "department": user.get("department"),
+            "status": user.get("status"),
+        },
+    )
     return JSONResponse(
         status_code=200,
         content={
@@ -49,13 +90,41 @@ def auth_signup(body: SignupRequest) -> JSONResponse:
 
 
 @router.post("/login", response_model=None)
-def auth_login(body: LoginRequest) -> JSONResponse:
+def auth_login(request: Request, body: LoginRequest) -> JSONResponse:
     try:
         data = login(login_id=body.login_id, password=body.password)
     except AuthServiceError as exc:
+        write_action_log_safe(
+            user_id=None,
+            action_type="LOGIN_FAILED",
+            result="FAIL",
+            request=request,
+            detail={"login_id": (body.login_id or "").strip()},
+            error_message=exc.message,
+        )
         return _auth_err(exc.status_code, exc.message)
     except Exception as exc:  # pragma: no cover
+        write_action_log_safe(
+            user_id=None,
+            action_type="LOGIN_FAILED",
+            result="FAIL",
+            request=request,
+            detail={"login_id": (body.login_id or "").strip()},
+            error_message=str(exc),
+        )
         return _auth_err(500, str(exc))
+    uid = uuid.UUID(data["user"]["id"])
+    write_action_log_safe(
+        user_id=uid,
+        action_type="LOGIN",
+        result="SUCCESS",
+        request=request,
+        detail={
+            "login_id": data["user"].get("login_id"),
+            "role": data["user"].get("role"),
+            "status": data["user"].get("status"),
+        },
+    )
     return JSONResponse(
         status_code=200,
         content={
@@ -84,6 +153,7 @@ def auth_me(user: CurrentUserContext = Depends(get_current_user)) -> JSONRespons
 
 @router.post("/change-password", response_model=None)
 def auth_change_password(
+    request: Request,
     body: ChangePasswordRequest,
     user: CurrentUserContext = Depends(get_current_user),
 ) -> JSONResponse:
@@ -94,9 +164,32 @@ def auth_change_password(
             new_password=body.new_password,
         )
     except AuthServiceError as exc:
+        write_action_log_safe(
+            user_id=user.id,
+            action_type="PASSWORD_CHANGE",
+            result="FAIL",
+            request=request,
+            detail={},
+            error_message=exc.message,
+        )
         return _auth_err(exc.status_code, exc.message)
     except Exception as exc:  # pragma: no cover
+        write_action_log_safe(
+            user_id=user.id,
+            action_type="PASSWORD_CHANGE",
+            result="FAIL",
+            request=request,
+            detail={},
+            error_message=str(exc),
+        )
         return _auth_err(500, str(exc))
+    write_action_log_safe(
+        user_id=user.id,
+        action_type="PASSWORD_CHANGE",
+        result="SUCCESS",
+        request=request,
+        detail={},
+    )
     return JSONResponse(
         status_code=200,
         content={

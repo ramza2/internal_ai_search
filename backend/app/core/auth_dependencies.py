@@ -1,9 +1,4 @@
-"""FastAPI dependencies for JWT auth (Step 19).
-
-Existing business routes stay **unauthenticated** until a later
-milestone wires these dependencies in. Admin-only routes use
-``require_admin_user``.
-"""
+"""FastAPI dependencies for JWT auth (Steps 19–20)."""
 
 from __future__ import annotations
 
@@ -18,6 +13,10 @@ from app.core.jwt_tokens import decode_access_token, parse_user_id_from_payload
 from app.db.database import get_db_connection
 
 security = HTTPBearer(auto_error=False)
+
+
+def _err(message: str) -> dict:
+    return {"status": "error", "message": message}
 
 
 class CurrentUserContext:
@@ -71,7 +70,7 @@ async def get_current_user(
     if creds is None or not creds.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
+            detail=_err("Authentication required"),
         )
     try:
         payload = decode_access_token(creds.credentials)
@@ -79,20 +78,20 @@ async def get_current_user(
     except jwt.InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
+            detail=_err("Invalid or expired token"),
         ) from None
 
     row = _fetch_user_by_id(uid)
     if not row:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
+            detail=_err("User not found"),
         )
     st = str(row.get("status") or "").upper()
     if st != "ACTIVE":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is not active",
+            detail=_err("Account is not active"),
         )
     return CurrentUserContext(row)
 
@@ -100,11 +99,30 @@ async def get_current_user(
 async def require_active_user(
     user: Annotated[CurrentUserContext, Depends(get_current_user)],
 ) -> CurrentUserContext:
-    """``ACTIVE`` users only (used by future protected routes)."""
+    """``ACTIVE`` users only (``get_current_user`` already enforces this)."""
     if user.status != "ACTIVE":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is not active",
+            detail=_err("Account is not active"),
+        )
+    return user
+
+
+async def require_password_ready_user(
+    user: Annotated[CurrentUserContext, Depends(get_current_user)],
+) -> CurrentUserContext:
+    """ACTIVE user that has completed mandatory password change."""
+    if user.status != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_err("Account is not active"),
+        )
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_err(
+                "Password change is required before using this feature",
+            ),
         )
     return user
 
@@ -112,16 +130,23 @@ async def require_active_user(
 async def require_admin_user(
     user: Annotated[CurrentUserContext, Depends(get_current_user)],
 ) -> CurrentUserContext:
-    """``ACTIVE`` + ``ADMIN`` — admin API gate."""
+    """ACTIVE + ADMIN + password change completed."""
     if user.status != "ACTIVE":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is not active",
+            detail=_err("Account is not active"),
+        )
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_err(
+                "Password change is required before using this feature",
+            ),
         )
     if user.role != "ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Administrator privileges required",
+            detail=_err("Admin permission required"),
         )
     return user
 
@@ -131,5 +156,6 @@ __all__ = [
     "get_current_user",
     "require_active_user",
     "require_admin_user",
+    "require_password_ready_user",
     "security",
 ]
