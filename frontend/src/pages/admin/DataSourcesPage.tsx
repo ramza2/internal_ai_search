@@ -24,6 +24,7 @@ export function DataSourcesPage() {
   const [msg, setMsg] = useState("");
   const [msgTone, setMsgTone] = useState<"info" | "success" | "danger">("info");
   const [showForm, setShowForm] = useState(false);
+  const [testingId, setTestingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     name: "",
@@ -59,6 +60,10 @@ export function DataSourcesPage() {
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
+    if (form.source_type === "LOCAL_FOLDER") {
+      setFlash("LOCAL_FOLDER 유형은 아직 지원하지 않습니다. (추후 지원 예정)", "danger");
+      return;
+    }
     setSaving(true);
     setMsg("");
     try {
@@ -92,6 +97,7 @@ export function DataSourcesPage() {
 
   async function testOne(id: string) {
     setMsg("");
+    setTestingId(id);
     try {
       const { data, status } = await dsApi.testDataSourceConnection(id);
       const ok = status >= 200 && status < 300;
@@ -100,6 +106,8 @@ export function DataSourcesPage() {
       await load();
     } catch (e) {
       setFlash(getApiErrorMessage(e), "danger");
+    } finally {
+      setTestingId(null);
     }
   }
 
@@ -137,7 +145,7 @@ export function DataSourcesPage() {
         title="등록"
         actions={
           <Button type="button" variant="secondary" size="sm" onClick={() => setShowForm((s) => !s)}>
-            {showForm ? "폼 닫기" : "새 데이터 소스"}
+            {showForm ? "폼 닫기" : "데이터 소스 추가"}
           </Button>
         }
       >
@@ -154,9 +162,14 @@ export function DataSourcesPage() {
                 <option value="OWNCLOUD">OWNCLOUD</option>
                 <option value="NEXTCLOUD">NEXTCLOUD</option>
                 <option value="GENERIC_WEBDAV">GENERIC_WEBDAV</option>
-                <option value="LOCAL_FOLDER">LOCAL_FOLDER</option>
+                <option value="LOCAL_FOLDER">LOCAL_FOLDER (추후 지원)</option>
               </Select>
             </FormField>
+            {form.source_type === "LOCAL_FOLDER" && (
+              <p className="muted" style={{ gridColumn: "1 / -1", margin: 0 }}>
+                LOCAL_FOLDER는 추후 지원 예정입니다. WebDAV 계열 유형을 선택해 주세요.
+              </p>
+            )}
             <FormField label="서버 URL">
               <Input value={form.server_url} onChange={(e) => setForm({ ...form, server_url: e.target.value })} required />
             </FormField>
@@ -176,7 +189,7 @@ export function DataSourcesPage() {
             <FormField label="설명" hint="선택">
               <Textarea rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
             </FormField>
-            <Button type="submit" variant="primary" loading={saving}>
+            <Button type="submit" variant="primary" loading={saving} disabled={saving || form.source_type === "LOCAL_FOLDER"}>
               등록
             </Button>
           </form>
@@ -184,6 +197,10 @@ export function DataSourcesPage() {
       </SectionCard>
 
       <SectionCard title="데이터 소스 목록">
+        <p className="muted" style={{ marginTop: 0 }}>
+          {/* TODO: 행 단위 수정·삭제 UI — 백엔드 PATCH/DELETE 연동 후 구현 */}
+          목록에서 이름·URL 등을 바꾸는 수정 기능은 추후 제공 예정입니다.
+        </p>
         <DataTable>
           <thead>
             <tr>
@@ -209,7 +226,9 @@ export function DataSourcesPage() {
                 <td>
                   {formatDateTime(ds.last_connection_test_at)}
                   <div style={{ marginTop: "0.25rem" }}>
-                    {ds.last_connection_success === true ? (
+                    {testingId === ds.id ? (
+                      <span className="muted">테스트 중…</span>
+                    ) : ds.last_connection_success === true ? (
                       <Badge variant="success">성공</Badge>
                     ) : ds.last_connection_success === false ? (
                       <Badge variant="danger">실패</Badge>
@@ -217,9 +236,21 @@ export function DataSourcesPage() {
                       <span className="muted">—</span>
                     )}
                   </div>
+                  {ds.last_connection_message && (
+                    <div className="snippet muted" style={{ marginTop: "0.35rem", maxWidth: "18rem", fontSize: "0.75rem" }}>
+                      {ds.last_connection_message}
+                    </div>
+                  )}
                 </td>
                 <td className="rowActions">
-                  <Button type="button" variant="secondary" size="sm" onClick={() => testOne(ds.id)}>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => testOne(ds.id)}
+                    loading={testingId === ds.id}
+                    disabled={testingId !== null && testingId !== ds.id}
+                  >
                     접속 테스트
                   </Button>
                   {ds.is_active ? (

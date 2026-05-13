@@ -4,6 +4,9 @@ export type SourceType =
   | "GENERIC_WEBDAV"
   | "LOCAL_FOLDER";
 
+/** 관리자 CRUD API (`GET /api/data-sources`) 행 — SearchDataSource 와 구분 */
+export type AdminDataSource = DataSource;
+
 export interface DataSource {
   id: string;
   name: string;

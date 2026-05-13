@@ -11,7 +11,7 @@ Vite + React + TypeScript 기반 웹 UI. 백엔드(FastAPI)와 JWT 인증으로 
 ## 현재 UI 구조
 
 - **디자인 토큰:** `src/styles/global.css`의 `:root` 변수(`--color-primary`, `--color-bg`, `--color-surface`, `--color-muted`, `--color-danger`, `--radius-*`, `--shadow-card` 등).
-- **공통 UI:** `src/components/ui/` (`Button`, `Input`, `Select`, `Textarea`, `Badge`, `Card`, `PageHeader`, `SectionCard`, `DataTable`, `FilterBar`/`FilterField`, `FormField`, `StatCard`, `ConfirmDialog`).
+- **공통 UI:** `src/components/ui/` (`Button`, `Input`, `Select`, `Textarea`, `Badge`, `Card`, `CollapsiblePanel`, `PageHeader`, `SectionCard`, `DataTable`, `FilterBar`/`FilterField`, `FormField`, `StatCard`, `ConfirmDialog`, `PaginationBar`, `DataSourceSelect`, `StatusBadge`, `RoleBadge`, `ResultBadge` 등).
 - **레이아웃:** `MainLayout` — 좌측 고정 사이드바(`--sidebar-width`), 상단 헤더, 본문 `pageShell`(max-width 1240px). `AuthLayout` — 상단 브랜딩 + 중앙 카드.
 
 ## 페이지 목록
@@ -55,13 +55,62 @@ npm run preview
 
 값 변경 후 `npm run dev`를 다시 실행하세요.
 
-## 아직 남은 UI TODO
+## 통합 검색 고급 필터 (`/search`)
 
-- 검색/답변 **고급 필터** UI(`data_source_id`, `min_score` 등) — API는 이미 있으나 화면 미구현.
-- 작업 로그 **기간 필터·페이지네이션**.
-- 미리보기 **쿼리 하이라이트** 정밀(offset 기반) — 현재는 highlights 라인 배경 위주.
-- Figma와의 **픽셀 단위** 맞춤(타이포 스케일·아이콘 세트 통일).
-- 모바일 **햄버거 메뉴** 등 본격 반응형(현재 1024~1440 중심).
+- 기본 영역: 검색어 입력 + 검색 실행. **고급 필터**는 `CollapsiblePanel`으로 접었다 펼 수 있습니다.
+- **검색 모드:** vector / keyword / hybrid.
+- **데이터 소스:** `useSearchDataSources()` → **`GET /api/search/data-sources`** (활성 소스만, URL·자격 증명 미포함). 목록 로드 실패 시 필터는 **전체**만 동작하고 작은 안내 문구를 표시합니다.
+- **확장자:** 쉼표 구분 입력 → `include_extensions` 배열로 변환.
+- **파일 유형:** DOCUMENT, SOURCE_CODE 등 버킷 선택.
+- **limit:** 10 / 20 / 50 / 100.
+- **min_score:** 숫자 입력. **hybrid**일 때만 **vector_weight / keyword_weight** 입력란 표시.
+- 검색 후 **적용 필터 요약** 문자열, 로딩·에러·빈 결과(`EmptyState`), 미리보기 링크는 기존과 동일한 패턴을 유지합니다.
+
+## AI 질문 고급 옵션 (`/answer`)
+
+- **고급 옵션** 패널: 검색 모드, 데이터 소스(`GET /api/search/data-sources`와 동일 훅), 확장자, 파일 유형, `search_limit`, `context_limit`, `answer_min_score`, 검색용 `min_score`, `temperature`, `max_context_chars`, hybrid 가중치, **dry_run** 체크박스.
+- **keyword** 모드 선택 시: 임베딩 없이 키워드 검색만 쓴다는 짧은 안내 배너.
+- **dry_run:** LLM 없이 `context_preview` 테이블로 후보 청크를 확인. 일반 답변과 **근거 부족** 문구는 서로 다른 스타일 박스로 구분.
+- 브라우저 세션에 옵션·결과를 저장(`ragSessionCache` v2)해 새로고침 후에도 복원됩니다.
+
+## 작업 로그 (`/admin/action-logs`)
+
+- **필터:** user_id, action_type(선택 상수 + 전체), result, data_source, target_file_id, keyword, from_date, to_date, limit(20/50/100/200).
+- **조회** 시에만 적용 필터가 반영되며 offset은 0으로 리셋됩니다. **필터 초기화**로 전부 초기화합니다.
+- **PaginationBar:** offset 기반 이전/다음, 현재 페이지·총 건수 표시. `total`으로 마지막 페이지를 계산합니다.
+- 상세 JSON은 행 **펼치기**로 유지합니다.
+
+## 사용자 관리 (`/admin/users`)
+
+- 상태·역할·키워드·limit(20/50/100) **조회** 후 목록 로드. **필터 초기화** 지원.
+- **PaginationBar** + API `total` 표시. 승인·역할 변경 등 작업 후 **현재 필터·offset**을 유지한 채 목록만 다시 불러옵니다.
+- **StatusBadge / RoleBadge**로 상태·역할 표시. 마지막 관리자 보호 등 API 오류는 **ErrorMessage**로 구분 표시(목록 로드 오류와 별도).
+
+## 데이터 소스 API 구분
+
+- **검색·AI 질문:** `useSearchDataSources()` → `GET /api/search/data-sources` — 일반 **USER**도 호출 가능(ACTIVE + 비밀번호 변경 완료). 응답에는 `id`, `name`, `source_type`, `description`, `last_scan_at`, `last_connection_success`만 포함됩니다.
+- **관리자 화면** (`DataSourcesPage`, 작업 로그 필터, 파일 통계 소스 선택 등): `useDataSources()` → `GET /api/data-sources` — **ADMIN** 전용 CRUD 목록(기존과 동일).
+
+## 파일 통계 (`/admin/file-stats`)
+
+- **전체:** `GET /api/files/stats` + `include_deleted` 쿼리.
+- **특정 소스:** `GET /api/data-sources/{id}/file-stats`.
+- 상단에서 소스 선택·삭제 포함 체크박스·새로고침.
+- 요약 카드: 전체 항목, 파일 수, 디렉터리 수, 전체 용량, 마지막 동기화(+ 파일 최근 수정 힌트).
+- 테이블: 분석 상태·파일 유형·확장자·대용량 TOP. TOP 목록은 확장자 휴리스틱으로 **텍스트 미리보기** 가능 시 `/files/{id}/preview` 링크.
+
+## 타입 (`src/types`)
+
+- `search.ts`, `answer.ts`, `admin.ts`, `dataSource.ts`(`AdminDataSource` 별칭), **`searchDataSource.ts`**(`SearchDataSource`), `file.ts`에 요청/응답 스키마를 맞춰 두었습니다.
+
+## 아직 남은 TODO (프론트)
+
+- **URL query state**와 필터·페이지(offset) 동기화 — 작업 로그·사용자 관리 등에 TODO 주석으로 표시해 두었습니다.
+- **차트 라이브러리** 도입(파일 통계 시각화).
+- **모바일 햄버거 메뉴** 등 본격 반응형.
+- 미리보기 **쿼리 하이라이트** 정밀(offset 기반).
+- 백엔드 **소스별 사용자 권한(ACL)** 도입 시 검색용 목록 API에서 행 필터링.
+- 데이터 소스 **행 단위 수정** UI — 백엔드 PATCH 연동 후.
 
 ## 다음 단계 제안
 

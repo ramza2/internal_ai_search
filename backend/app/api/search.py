@@ -5,6 +5,10 @@ One POST route: ``POST /api/search``. Request body is validated by
 (:func:`run_search`) handles embedding + pgvector cosine search, and
 the response is rendered with :class:`SearchResponse`.
 
+One GET route: ``GET /api/search/data-sources`` — read-only list of
+**active** data sources for Search / Answer UI filters (no secrets;
+not written to ``action_logs``).
+
 This module deliberately keeps the JSON error shapes consistent with
 the rest of the project:
 
@@ -32,6 +36,10 @@ from app.services.search_service import (
     EmbeddingFailure,
     SearchDatabaseError,
     run_search,
+)
+from app.services.search_data_source_service import (
+    SearchDataSourcesQueryError,
+    list_search_data_sources_public,
 )
 
 
@@ -287,4 +295,41 @@ async def search_endpoint(
     return JSONResponse(
         status_code=200,
         content=response.model_dump(mode="json"),
+    )
+
+
+@router.get("/search/data-sources", response_model=None)
+async def list_search_data_sources_endpoint(
+    _user: CurrentUserContext = Depends(require_password_ready_user),
+) -> JSONResponse:
+    """Read-only active data sources for Search / Answer UI (no WebDAV secrets).
+
+    Deliberately **not** written to ``action_logs`` — frequent UI polling.
+
+    TODO: When the product needs tenant isolation, filter rows by per-user
+    ``data_source`` permissions in :func:`list_search_data_sources_public`.
+    """
+    try:
+        envelope = list_search_data_sources_public(is_active=True)
+    except SearchDataSourcesQueryError as exc:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": "Failed to retrieve search data sources",
+                "error": exc.message,
+            },
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": "Failed to retrieve search data sources",
+                "error": str(exc),
+            },
+        )
+    return JSONResponse(
+        status_code=200,
+        content=envelope.model_dump(mode="json"),
     )

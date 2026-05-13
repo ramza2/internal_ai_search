@@ -67,3 +67,39 @@
   gap: 0.5rem;
   margin-bottom: 0.75rem;
 }
+
+.advGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem 1rem;
+  align-items: end;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--color-muted);
+  grid-column: 1 / -1;
+}
+
+.insufficientBox {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid #fbbf24;
+  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+  color: #92400e;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.citeWrap {
+  overflow-x: auto;
+}
+
+.citeFile {
+  font-weight: 600;
+  color: var(--color-text);
+}

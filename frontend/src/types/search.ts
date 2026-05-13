@@ -1,5 +1,17 @@
 export type SearchMode = "vector" | "keyword" | "hybrid";
 
+/** 백엔드 `app.utils.file_type` 분류와 동일한 문자열 */
+export type FileTypeBucket =
+  | "DOCUMENT"
+  | "SOURCE_CODE"
+  | "CONFIG"
+  | "LOG"
+  | "IMAGE"
+  | "AUDIO_VIDEO"
+  | "ARCHIVE"
+  | "BINARY"
+  | "UNKNOWN";
+
 export interface SearchRequest {
   query: string;
   data_source_id?: string | null;
@@ -12,6 +24,16 @@ export interface SearchRequest {
   keyword_weight?: number;
   vector_candidate_limit?: number;
   keyword_candidate_limit?: number;
+}
+
+export interface SearchDataSourceScope {
+  data_source_id: string | null;
+  data_source_name: string;
+}
+
+export interface SearchWeights {
+  vector_weight: number;
+  keyword_weight: number;
 }
 
 export interface SearchResultItem {
@@ -44,8 +66,14 @@ export interface SearchResponse {
   status: string;
   query: string;
   search_mode: SearchMode;
+  embedding_model?: string | null;
+  embedding_provider?: string | null;
+  expected_dimension?: number | null;
+  data_source_scope?: SearchDataSourceScope;
   total_results: number;
+  limit: number;
+  min_score: number;
+  weights: SearchWeights;
   results: SearchResultItem[];
-  message?: string;
-  [key: string]: unknown;
+  message: string;
 }

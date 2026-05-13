@@ -1,6 +1,7 @@
 import { httpClient } from "@/api/httpClient";
 import type {
   ActionLogsListResponse,
+  ActionLogsQueryParams,
   AdminUserRow,
   AdminUsersListResponse,
 } from "@/types/admin";
@@ -61,16 +62,9 @@ export async function setUserRole(
   return { user: data.user };
 }
 
-export async function listActionLogs(params: {
-  action_type?: string;
-  result?: string;
-  keyword?: string;
-  limit?: number;
-  offset?: number;
-}): Promise<ActionLogsListResponse> {
-  const { data } = await httpClient.get<ActionLogsListResponse>(
-    "/api/admin/action-logs",
-    { params }
-  );
+export async function listActionLogs(params: ActionLogsQueryParams): Promise<ActionLogsListResponse> {
+  const { data } = await httpClient.get<ActionLogsListResponse>("/api/admin/action-logs", {
+    params,
+  });
   return data;
 }

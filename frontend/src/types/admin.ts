@@ -18,6 +18,9 @@ export interface AdminUsersListResponse {
   items: AdminUserRow[];
 }
 
+/** 문서·코드에서 동일 의미로 쓰기 위한 별칭 */
+export type UserListResponse = AdminUsersListResponse;
+
 export interface ActionLogItem {
   id: string;
   user_id: string | null;
@@ -43,4 +46,19 @@ export interface ActionLogsListResponse {
   status: string;
   total: number;
   items: ActionLogItem[];
+}
+
+export type ActionLogListResponse = ActionLogsListResponse;
+
+export interface ActionLogsQueryParams {
+  user_id?: string;
+  action_type?: string;
+  result?: string;
+  data_source_id?: string;
+  target_file_id?: string;
+  keyword?: string;
+  from_date?: string;
+  to_date?: string;
+  limit?: number;
+  offset?: number;
 }

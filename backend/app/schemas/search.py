@@ -261,6 +261,32 @@ class SearchResponse(BaseModel):
     message: str
 
 
+class SearchDataSourcePublic(BaseModel):
+    """Safe row for ``GET /api/search/data-sources`` (search / RAG filter UI).
+
+    Intentionally omits ``server_url``, ``webdav_root_path``, ``username``,
+    any credential material, ``created_by``, and ``last_connection_message``.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    source_type: str
+    description: str | None = None
+    last_scan_at: datetime | None = None
+    last_connection_success: bool | None = None
+
+
+class SearchDataSourceListResponse(BaseModel):
+    """Envelope for the read-only search-scope data source list."""
+
+    status: str = "ok"
+    items: list[SearchDataSourcePublic]
+    total: int
+    message: str = "Search data sources retrieved successfully"
+
+
 __all__ = [
     "CANDIDATE_LIMIT_MAX",
     "CANDIDATE_LIMIT_MIN",
@@ -275,6 +301,8 @@ __all__ = [
     "QUERY_MIN_LEN",
     "SCORE_MAX",
     "SCORE_MIN",
+    "SearchDataSourceListResponse",
+    "SearchDataSourcePublic",
     "SearchMode",
     "SearchRequest",
     "SearchResponse",

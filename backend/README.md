@@ -21,7 +21,7 @@ This backend follows a phased roadmap. Implemented so far:
 - **Step 17:** Hybrid keyword search — `POST /api/search` gains a `search_mode` knob (`vector` *(default, unchanged)* / `keyword` / `hybrid`). `keyword` runs an `ILIKE` candidate fetch over `files.filename`, `files.remote_path`, and `document_chunks.chunk_text` **without** calling Ollama, scores each row in Python (phrase + token bonuses, clamped at 1.0, with `match_reasons` like `FILENAME_MATCH` / `CHUNK_TOKEN_MATCH`), and returns the top-K. `hybrid` runs both paths against bounded candidate pools (`vector_candidate_limit` / `keyword_candidate_limit`, default 50 each), merges by `chunk_id`, and ranks by `final_score = (vector_weight·vector_score + keyword_weight·keyword_score) / (vector_weight + keyword_weight)`. `POST /api/answer` accepts the same `search_mode` and forwards it to the underlying search call, so RAG can now reuse hybrid retrieval without any prompt changes. `chunk_text` is still never returned. **No PostgreSQL full-text search, no BM25, no cross-encoder reranker, no prompt changes.**
 - **Step 18:** File / chunk preview — `GET /api/files/{file_id}/preview` and `GET /api/files/{file_id}/chunks/{chunk_id}/preview` return metadata plus a **bounded** (`max_chars`) line-numbered slice of `file_contents.extracted_text` for UI click-through from search / RAG citations. Optional `query` adds offset-only highlights (no HTML). `open_info` carries credential-free WebDAV URL parts. **No** WebDAV download, file mutation, or RBAC yet.
 - **Step 19:** Auth + admin users — `POST /api/auth/signup` (PENDING user), `POST /api/auth/login` (JWT for ACTIVE only), `GET /api/auth/me`, `POST /api/auth/change-password`, and admin-only `GET/PATCH /api/admin/users/...` (approve, activate, deactivate, lock, role). Startup bootstraps the first `ADMIN` from `INITIAL_ADMIN_*` when none exists (`must_change_password=true`). Dependencies: `bcrypt`, `PyJWT`. **No** SSO/LDAP, email verify, MFA, or refresh tokens yet.
-- **Step 20:** RBAC on existing APIs + `action_logs` audit (1st pass) — `POST /api/search`, `POST /api/answer`, and file preview routes require a logged-in user with `must_change_password=false`; all `/api/data-sources/*`, `GET /api/files/stats`, `GET /api/data-sources/{id}/file-stats`, `/api/admin/users/*`, and `GET /api/admin/action-logs` require **ACTIVE** **ADMIN** with password change cleared. Health + `POST /api/auth/signup` + `POST /api/auth/login` stay public. Best-effort writes to `action_logs` (`db/migrations/020_action_logs.sql`) for auth, search, RAG, preview, admin user actions, and data-source operations; **no** secrets or full LLM bodies in `detail`. Admin log viewer records `ACTION_LOG_VIEW` with minimal filter metadata.
+- **Step 20:** RBAC on existing APIs + `action_logs` audit (1st pass) — `POST /api/search`, `POST /api/answer`, and file preview routes require a logged-in user with `must_change_password=false`; `GET /api/search/data-sources` (read-only active sources for Search / Answer UI filters, **no** secrets) uses the same user gate and is **excluded** from `action_logs` because the UI may call it frequently. All `/api/data-sources/*`, `GET /api/files/stats`, `GET /api/data-sources/{id}/file-stats`, `/api/admin/users/*`, and `GET /api/admin/action-logs` require **ACTIVE** **ADMIN** with password change cleared. Health + `POST /api/auth/signup` + `POST /api/auth/login` stay public. Best-effort writes to `action_logs` (`db/migrations/020_action_logs.sql`) for auth, search, RAG, preview, admin user actions, and data-source operations; **no** secrets or full LLM bodies in `detail`. Admin log viewer records `ACTION_LOG_VIEW` with minimal filter metadata.
 
 ## Project structure
 
@@ -706,6 +706,21 @@ curl -X POST "http://localhost:8000/api/data-sources/{id}/embed-pending-chunks?f
 curl -X POST "http://localhost:8000/api/data-sources/{id}/embed-pending-chunks?reembed=true&limit=100"
 ```
 
+### Search-scoped data sources (`GET /api/search/data-sources`, read-only)
+
+- **Who:** Any **ACTIVE** JWT user with **`must_change_password=false`** (same gate as `POST /api/search` / `POST /api/answer`). **ADMIN** and **USER** both may call it.
+- **Purpose:** Populate Search / Answer UI data-source filters without exposing WebDAV secrets or admin-only CRUD fields.
+- **Rows:** Only `data_sources.is_active = TRUE`. Ordered by `COALESCE(last_scan_at, 'epoch'::timestamptz) DESC`, then `name ASC` (recently scanned sources first).
+- **Fields returned per item:** `id`, `name`, `source_type`, `description`, `last_scan_at`, `last_connection_success` only.
+- **Never returned:** `server_url`, `webdav_root_path`, `username`, `credential_secret`, `credential_secret_enc`, `created_by`, `last_connection_message`, or other operational internals.
+- **Audit:** This route is **not** written to `action_logs` — the UI may poll it frequently when opening Search / Answer panels; logging every call would add noise and storage cost without security benefit.
+- **Future:** Per-user `data_source` ACL filtering may be added in `search_data_source_service` for multi-tenant deployments (TODO in code).
+
+```bash
+curl -sS "http://localhost:8000/api/search/data-sources" \
+  -H "Authorization: Bearer <access_token>"
+```
+
 ### Vector search (`POST /api/search`, Step 15)
 
 Embeds the request's `query` via the same Ollama model (`bge-m3`, dimension **1024**) used by Step 14, then runs a `pgvector` **cosine** search (`<=>`) against `document_chunks.embedding vector(1024)`, joining `files` and `data_sources` so each hit carries `filename`, `remote_path`, `extension`, `file_type` label, `last_modified`, `last_indexed_at`, `data_source_name`, and `source_type`. Each returned chunk's `chunk_text` is **never** exposed — the response contains a ≤ **300-char** `snippet` centered on the query (or the leading 300 chars when the query is not a literal substring).
@@ -752,7 +767,7 @@ This is the first read-side endpoint in the project; it intentionally does **no*
   - Any other unexpected exception → `500 Internal server error`. The server process is never crashed by a bad request.
 - **Security / logging policy**
   - `chunk_text` is never returned and never logged — only the trimmed snippet is. Credentials are not touched in this endpoint.
-  - The `query` string is treated like any other user input (no command/SQL injection — vector + extension filters are parameter-bound), but it is **not** persisted to `action_logs` yet because authentication is not implemented.
+  - Successful `POST /api/search` runs emit `SEARCH` in `action_logs` (Step 20) with metadata only — not full chunk text.
 - **Out of scope for the Step-15 vector path** *(Step 17 below covers keyword + hybrid)*
   - RAG: assembling top-K results into an LLM context and generating an answer.
   - LLM answer / chat endpoints.
