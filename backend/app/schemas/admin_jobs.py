@@ -34,6 +34,16 @@ class AdminJobItem(BaseModel):
     requested_by_name: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # Worker-ready fields (migration ``022``); omitted in API when columns absent
+    job_params: dict[str, Any] | list[Any] | None = None
+    cancel_requested: bool = False
+    worker_id: str | None = None
+    heartbeat_at: datetime | None = None
+    parent_job_id: UUID | None = None
+    pipeline_step: str | None = None
+    retry_count: int = 0
+    max_retries: int = 1
+    priority: int = 0
 
 
 class AdminJobListResponse(BaseModel):

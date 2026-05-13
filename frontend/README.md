@@ -91,6 +91,7 @@ npm run preview
 - **경고:** `scan_jobs` / `scan_failures` 테이블이 없는 개발 DB에서는 API가 빈 목록과 `warnings`를 주며 UI에 안내합니다.
 - **조회 전용:** 취소·재시도·백그라운드 실행은 worker 도입 후 예정입니다. `action_logs`에 이 화면의 조회를 남기지 않습니다(백엔드 README와 동일 정책).
 - **과거 데이터:** DB에 남아 있는 오래된 행은 `job_type`이 `MANUAL_SCAN`일 수 있습니다(백엔드가 일괄 백필하지 않음). 실제 실행 단계는 `action_logs`와 시간대를 맞춰 추정해야 합니다.
+- **Worker 준비 필드(마이그레이션 022):** 테이블에 `priority`, `worker_id`, `heartbeat_at`, `pipeline_step`, `retry_count` / `max_retries`, `cancel_requested`, `parent_job_id`, `job_params` 등이 있으면 목록·상세에 표시합니다. **지금은 worker가 없어** 대부분 `null`/기본값이며, worker 도입 후 `heartbeat`·`worker_id`·`cancel_requested`가 의미를 갖습니다. `job_params`는 `<details>` 로 접기/펼치기 JSON(서버에서 비밀 키 제거).
 
 ## 작업 로그 (`/admin/action-logs`)
 

@@ -25,6 +25,7 @@ export function getJobStatusBadgeVariant(status: string): BadgeVariant {
   if (u === "RUNNING") return "warning";
   if (u === "PENDING") return "primary";
   if (u === "PARTIAL") return "warning";
+  if (u === "CANCELLING") return "warning";
   if (u === "CANCELLED" || u === "STOPPED") return "neutral";
   return "neutral";
 }

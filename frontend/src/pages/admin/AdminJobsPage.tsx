@@ -22,7 +22,17 @@ import { formatDateTime, formatDuration } from "@/utils/format";
 import { getJobStatusBadgeVariant, getJobTypeLabel } from "@/utils/jobLabels";
 import docStyles from "./DocumentProcessModal.module.css";
 
-const STATUS_OPTIONS = ["", "RUNNING", "COMPLETED", "FAILED", "PENDING", "CANCELLED", "STOPPED", "PARTIAL"] as const;
+const STATUS_OPTIONS = [
+  "",
+  "RUNNING",
+  "COMPLETED",
+  "FAILED",
+  "PENDING",
+  "CANCELLING",
+  "CANCELLED",
+  "PARTIAL",
+  "STOPPED",
+] as const;
 
 const JOB_TYPE_FILTER_CODES = [
   "MANUAL_SCAN",
@@ -59,6 +69,16 @@ function errSnippet(s: string | null | undefined, max = 80): string {
   const t = s.trim();
   if (t.length <= max) return t;
   return `${t.slice(0, max)}…`;
+}
+
+function dashStr(v: string | null | undefined): string {
+  if (v == null || v === "") return "—";
+  return v;
+}
+
+function dashNum(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return "—";
+  return String(v);
 }
 
 export function AdminJobsPage() {
@@ -291,58 +311,78 @@ export function AdminJobsPage() {
         {items.length === 0 && !listBusy ? (
           <EmptyState title="작업이 없습니다" description="필터를 바꾸거나 기간을 넓혀 보세요." />
         ) : (
-          <DataTable>
-            <thead>
-              <tr>
-                <th>작업 유형</th>
-                <th>status</th>
-                <th>소스</th>
-                <th>시작</th>
-                <th>종료</th>
-                <th>소요</th>
-                <th>진행</th>
-                <th>완료/실패/스킵/삭제</th>
-                <th>오류 요약</th>
-                <th style={{ width: "6rem" }} />
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((j) => (
-                <tr key={j.id}>
-                  <td>
-                    <div>{getJobTypeLabel(j.job_type)}</div>
-                    <div className="muted" style={{ fontSize: "0.75rem" }}>
-                      {j.job_type}
-                    </div>
-                  </td>
-                  <td>
-                    <Badge variant={getJobStatusBadgeVariant(j.status)}>{j.status}</Badge>
-                  </td>
-                  <td>{j.data_source_name ?? "—"}</td>
-                  <td>{formatDateTime(j.started_at)}</td>
-                  <td>{formatDateTime(j.finished_at)}</td>
-                  <td>{j.duration_ms != null ? formatDuration(j.duration_ms) : "—"}</td>
-                  <td>
-                    {j.progress_percent != null ? `${j.progress_percent}%` : "—"}
-                    <div className="muted" style={{ fontSize: "0.75rem" }}>
-                      {j.processed_files}/{j.total_files}
-                    </div>
-                  </td>
-                  <td style={{ fontSize: "0.8rem" }}>
-                    {j.completed_files}/{j.failed_files}/{j.skipped_files}/{j.deleted_files}
-                  </td>
-                  <td className="snippet" style={{ maxWidth: "12rem", fontSize: "0.8rem" }}>
-                    {errSnippet(j.error_message, 100)}
-                  </td>
-                  <td>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => void openDetail(j.id)} disabled={listBusy}>
-                      상세
-                    </Button>
-                  </td>
+          <div style={{ overflowX: "auto" }}>
+            <DataTable>
+              <thead>
+                <tr>
+                  <th>작업 유형</th>
+                  <th>status</th>
+                  <th>소스</th>
+                  <th>우선순위</th>
+                  <th>파이프라인</th>
+                  <th>worker</th>
+                  <th>heartbeat</th>
+                  <th>재시도</th>
+                  <th>시작</th>
+                  <th>종료</th>
+                  <th>소요</th>
+                  <th>진행</th>
+                  <th>완료/실패/스킵/삭제</th>
+                  <th>오류 요약</th>
+                  <th style={{ width: "6rem" }} />
                 </tr>
-              ))}
-            </tbody>
-          </DataTable>
+              </thead>
+              <tbody>
+                {items.map((j) => (
+                  <tr key={j.id}>
+                    <td>
+                      <div>{getJobTypeLabel(j.job_type)}</div>
+                      <div className="muted" style={{ fontSize: "0.75rem" }}>
+                        {j.job_type}
+                      </div>
+                    </td>
+                    <td>
+                      <Badge variant={getJobStatusBadgeVariant(j.status)}>{j.status}</Badge>
+                    </td>
+                    <td>{j.data_source_name ?? "—"}</td>
+                    <td style={{ fontSize: "0.85rem" }}>{dashNum(j.priority)}</td>
+                    <td className="snippet" style={{ fontSize: "0.8rem", maxWidth: "7rem" }}>
+                      {dashStr(j.pipeline_step)}
+                    </td>
+                    <td className="snippet" style={{ fontSize: "0.75rem", maxWidth: "6rem" }}>
+                      {dashStr(j.worker_id)}
+                    </td>
+                    <td style={{ fontSize: "0.75rem", whiteSpace: "nowrap" }}>
+                      {formatDateTime(j.heartbeat_at)}
+                    </td>
+                    <td style={{ fontSize: "0.8rem" }}>
+                      {dashNum(j.retry_count)} / {dashNum(j.max_retries)}
+                    </td>
+                    <td>{formatDateTime(j.started_at)}</td>
+                    <td>{formatDateTime(j.finished_at)}</td>
+                    <td>{j.duration_ms != null ? formatDuration(j.duration_ms) : "—"}</td>
+                    <td>
+                      {j.progress_percent != null ? `${j.progress_percent}%` : "—"}
+                      <div className="muted" style={{ fontSize: "0.75rem" }}>
+                        {j.processed_files}/{j.total_files}
+                      </div>
+                    </td>
+                    <td style={{ fontSize: "0.8rem" }}>
+                      {j.completed_files}/{j.failed_files}/{j.skipped_files}/{j.deleted_files}
+                    </td>
+                    <td className="snippet" style={{ maxWidth: "12rem", fontSize: "0.8rem" }}>
+                      {errSnippet(j.error_message, 100)}
+                    </td>
+                    <td>
+                      <Button type="button" variant="ghost" size="sm" onClick={() => void openDetail(j.id)} disabled={listBusy}>
+                        상세
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </DataTable>
+          </div>
         )}
       </SectionCard>
 
@@ -415,7 +455,44 @@ export function AdminJobsPage() {
                     <dd className="snippet" style={{ margin: 0, whiteSpace: "pre-wrap" }}>
                       {detail.job.error_message ?? "—"}
                     </dd>
+                    <dt className="muted">cancel_requested</dt>
+                    <dd style={{ margin: 0 }}>{detail.job.cancel_requested ? "예" : "아니오"}</dd>
+                    <dt className="muted">worker / heartbeat</dt>
+                    <dd style={{ margin: 0 }}>
+                      {dashStr(detail.job.worker_id)} · {formatDateTime(detail.job.heartbeat_at)}
+                    </dd>
+                    <dt className="muted">priority</dt>
+                    <dd style={{ margin: 0 }}>{dashNum(detail.job.priority)}</dd>
+                    <dt className="muted">retry</dt>
+                    <dd style={{ margin: 0 }}>
+                      {dashNum(detail.job.retry_count)} / {dashNum(detail.job.max_retries)}
+                    </dd>
+                    <dt className="muted">pipeline_step</dt>
+                    <dd style={{ margin: 0 }}>{dashStr(detail.job.pipeline_step)}</dd>
+                    <dt className="muted">parent_job_id</dt>
+                    <dd className="snippet" style={{ margin: 0 }}>
+                      {detail.job.parent_job_id ?? "—"}
+                    </dd>
                   </dl>
+
+                  {detail.job.job_params != null && (
+                    <details style={{ marginTop: "0.75rem", fontSize: "0.85rem" }}>
+                      <summary style={{ cursor: "pointer", marginBottom: "0.35rem" }}>job_params (JSON)</summary>
+                      <pre
+                        style={{
+                          margin: 0,
+                          padding: "0.5rem",
+                          background: "var(--color-surface-elevated, #f4f4f5)",
+                          borderRadius: "var(--radius-sm, 6px)",
+                          overflow: "auto",
+                          maxHeight: "14rem",
+                          fontSize: "0.75rem",
+                        }}
+                      >
+                        {JSON.stringify(detail.job.job_params, null, 2)}
+                      </pre>
+                    </details>
+                  )}
 
                   <h4 style={{ marginTop: "1rem", fontSize: "0.95rem" }}>실패 목록</h4>
                   {failuresBusy && <p className="muted">실패 행 불러오는 중…</p>}

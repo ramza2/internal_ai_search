@@ -341,18 +341,32 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS scan_failures_job_idx
 ## 11. 요약 체크리스트 (워커 도입 전)
 
 1. **운영 DB에서 `scan_jobs` / `scan_failures` 실제 DDL·enum 값 확보** (레포에 없음).  
-2. **`job_type` 단일화(`MANUAL_SCAN`) 해소** 방안 확정.  
-3. **`PENDING` + worker dequeue** 모델과 기존 **`RUNNING` 즉시 삽입`** 모델 중 하나로 통일.  
+2. **`job_type` 단일화(`MANUAL_SCAN`) 해소** 방안 확정 — **부분 해결:** 마이그레이션 **021** + 앱에서 세분화된 `job_type` 기록(신규 실행부터). 과거 row 백필 없음.  
+3. **`PENDING` + worker dequeue** 와 **`RUNNING` 즉시 삽입** — **병행 준비:** 마이그레이션 **022**로 enum·컬럼 준비, `enqueue_scan_job`(PENDING)는 코드에만 있고 동기 API는 여전히 `create_scan_job`(RUNNING)만 사용. 실제 큐 소비 worker 미구현.  
 4. **`fail_scan_job` 시 카운터·진행 스냅샷** 정책 결정.  
-5. **`CHUNK_SAVE_FAILED` vs `scan_failures_service` 허용 목록** 정합화.  
+5. **`CHUNK_SAVE_FAILED` 정합** — **021** 및 코드 허용 목록 반영.  
 6. **동시 실행 방지**를 DB 제약으로 할지 애플리케이션으로 할지 결정.  
-7. **인덱스**는 실제 쿼리 패턴(폴링 쿼리 문) 확정 후 추가.
+7. **인덱스** — **022**에서 폴링·조회용 인덱스 반영(일반 `CREATE INDEX`; 대용량 운영은 `CONCURRENTLY` 별도 검토).
 
 ---
 
-## 부록: 이번 단계에서 하지 않은 것
+## 12. 마이그레이션 022 적용 후 (업데이트)
 
-- DB 스키마 변경 및 위 SQL의 실제 실행  
-- worker / 신규 API / 프론트 수정  
+| 항목 | 상태 |
+|------|------|
+| `scan_job_status`에 `PENDING`, `CANCELLING`, `CANCELLED`, `PARTIAL` | ✅ `022_scan_jobs_worker_fields.sql` |
+| worker용 `scan_jobs` 컬럼·인덱스·`scan_failures(scan_job_id)` | ✅ 동일 |
+| `enqueue_scan_job` / `update_scan_job_progress` / `is_cancel_requested` | ✅ 코드 준비(worker 미연결) |
+| 관리자 API·화면 신규 필드·`job_params` sanitize | ✅ |
 
-(요구사항과 동일.)
+**아직 남음:** 실제 **polling worker**, **enqueue HTTP API**, **취소/재시도 API**, **parent–child 파이프라인 규칙**(컬럼만 존재).
+
+---
+
+## 부록: 의도적으로 아직 하지 않은 것
+
+- Worker 프로세스 구현  
+- `PENDING` 작업을 실제로 적재하는 공개 API  
+- 동기 파이프라인을 enqueue 전용으로 전환  
+
+(과거 문구와 달리 **021·022 마이그레이션 및 관련 코드는 레포에 반영됨**.)

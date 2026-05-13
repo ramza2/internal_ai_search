@@ -23,6 +23,17 @@ export interface AdminJob {
   requested_by_name?: string | null;
   created_at: string | null;
   updated_at: string | null;
+  /** Worker-ready (migration 022); often null until worker exists */
+  job_params?: Record<string, unknown> | unknown[] | null;
+  cancel_requested?: boolean;
+  worker_id?: string | null;
+  heartbeat_at?: string | null;
+  parent_job_id?: string | null;
+  pipeline_step?: string | null;
+  retry_count?: number;
+  max_retries?: number;
+  /** Higher = higher dequeue priority (backend convention) */
+  priority?: number;
 }
 
 export interface AdminJobListResponse {

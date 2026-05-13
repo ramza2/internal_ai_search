@@ -121,7 +121,8 @@ backend/
 │  └─ migrations/
 │     ├─ 019_app_users.sql
 │     ├─ 020_action_logs.sql
-│     └─ 021_scan_job_type_values.sql
+│     ├─ 021_scan_job_type_values.sql
+│     └─ 022_scan_jobs_worker_fields.sql
 ├─ requirements.txt
 ├─ .env   (local only; gitignored — create next to this README)
 └─ README.md
@@ -1061,7 +1062,11 @@ curl "http://localhost:8000/api/files/{file_id}/chunks/{chunk_id}/preview?contex
 
 **`scan_jobs` / `scan_failures` enums (optional, after your baseline `scan_jobs` DDL):** Apply `db/migrations/021_scan_job_type_values.sql` when the database defines PostgreSQL enum `scan_job_type` (and optionally `scan_failure_error_code` for `scan_failures.error_code`). It adds `WEBDAV_SYNC_ROOT`, `WEBDAV_SYNC_TREE`, `PROCESS_PENDING_TEXT`, `PROCESS_PENDING_DOCUMENTS`, `CHUNK_COMPLETED_TEXT`, `EMBED_PENDING_CHUNKS` while keeping **`MANUAL_SCAN`**, and adds **`CHUNK_SAVE_FAILED`** to `scan_failure_error_code` **only if** that type exists (plain `VARCHAR` error columns → no-op). **No backfill** of historical rows: older jobs may still show `MANUAL_SCAN`; reconciling them with `action_logs` without a time correlation is intentionally out of scope. Until this migration runs, `create_scan_job` may return `NULL` for new enum labels while the HTTP pipeline still succeeds.
 
-**Worker / queue (not in this repo step):** There is still **no** background worker, **`PENDING` job queue state**, heartbeat, cancel API, or `202 Accepted` job polling — all pipeline endpoints remain **synchronous**; `scan_jobs` is observability only.
+**`scan_jobs` worker-ready schema (`022_scan_jobs_worker_fields.sql`):** Run after `scan_jobs` exists. Extends enum **`scan_job_status`** with **`PENDING`**, **`CANCELLING`**, **`CANCELLED`**, **`PARTIAL`** (existing **`RUNNING` / `COMPLETED` / `FAILED`** unchanged). Adds columns: **`job_params`** `JSONB`, **`cancel_requested`** `BOOLEAN NOT NULL DEFAULT FALSE`, **`worker_id`** `VARCHAR(100)`, **`heartbeat_at`** `TIMESTAMPTZ`, **`parent_job_id`** `UUID` (no FK in migration — optional future constraint), **`pipeline_step`** `VARCHAR(50)`, **`retry_count`** / **`max_retries`** / **`priority`** integers with defaults. **`priority`**: larger number = **higher** dequeue priority. Indexes: `(status, created_at)`, `(status, priority DESC, created_at)`, `(data_source_id, status)`, `(parent_job_id)`, partial **`(heartbeat_at)` WHERE status = RUNNING**, `(requested_by, created_at DESC)`, plus **`scan_failures(scan_job_id)`**. Plain **`CREATE INDEX IF NOT EXISTS`** — for very large tables in production, consider **`CREATE INDEX CONCURRENTLY`** in a separate maintenance script. **`job_params`** must never store credentials, tokens, file bodies, or LLM prompts (application sanitizers strip common secret keys before enqueue/API responses).
+
+**Worker prep functions (no worker process yet):** `enqueue_scan_job` inserts **`status='PENDING'`** rows for a future DB-polling worker (returns **`None`** if DDL/columns missing). **`update_scan_job_progress`** updates counters / **`current_file_path`** and optionally **`heartbeat_at`**. **`is_cancel_requested`** reads **`cancel_requested`**. Synchronous pipeline endpoints still use **`create_scan_job`** → **`RUNNING`** only; they do **not** call **`enqueue_scan_job`** yet. **`PENDING`** will be used when a future job-creation API enqueues work.
+
+**Worker process:** There is still **no** polling worker binary, **no** enqueue HTTP API, **no** cancel/retry APIs, and **no** change to synchronous request/response shapes — pipeline **`POST /api/data-sources/...`** endpoints remain **blocking**.
 
 **Initial admin:** On application startup, if **no** row with `role = ADMIN` exists, the server inserts one admin from `INITIAL_ADMIN_*` env vars (`must_change_password=true`, `status=ACTIVE`). If `INITIAL_ADMIN_PASSWORD` is empty, bootstrap is skipped (warning log). Failures are **non-fatal** — the API still starts (e.g. missing table in early dev).
 
@@ -1081,7 +1086,7 @@ curl "http://localhost:8000/api/files/{file_id}/chunks/{chunk_id}/preview?contex
 
 **Admin job list (read-only, pre-worker):** Same **ACTIVE ADMIN** gate. These routes surface **`scan_jobs`** and **`scan_failures`** already written by sync/pipeline code; they do **not** enqueue work, cancel jobs, or change schema.
 
-- `GET /api/admin/jobs` — Query: `data_source_id`, `status`, `job_type`, `keyword` (ILIKE on `data_sources.name`, `sj.current_file_path`, `sj.error_message`), `from_date`, `to_date` (on `sj.created_at`), `limit` (default **50**, max 200), `offset`. Response: `total`, `items` (each with `data_source_name`, `duration_ms`, `progress_percent`, `requested_by` UUID plus `requested_by_login_id` / `requested_by_name` via `LEFT JOIN app_users` when `sj.requested_by` is set), optional `warnings` when `scan_jobs` is missing (empty list, `total: 0`, `message`).
+- `GET /api/admin/jobs` — Query: `data_source_id`, `status`, `job_type`, `keyword` (ILIKE on `data_sources.name`, `sj.current_file_path`, `sj.error_message`), `from_date`, `to_date` (on `sj.created_at`), `limit` (default **50**, max 200), `offset`. Response: `total`, `items` (each with `data_source_name`, `duration_ms`, `progress_percent`, `requested_by` + join fields, and — when migration **`022`** columns exist — `job_params`, `cancel_requested`, `worker_id`, `heartbeat_at`, `parent_job_id`, `pipeline_step`, `retry_count`, `max_retries`, `priority`; `job_params` is sanitized for secrets). Optional `warnings` when `scan_jobs` is missing (empty list, `total: 0`, `message`).
 - `GET /api/admin/jobs/{job_id}` — Single job + `failures_count`. **404** when not found. **503** when `scan_jobs` table is unavailable. `duration_ms`: `(finished_at - started_at)` when both set; if `status = RUNNING` and `finished_at` is null, `NOW() - started_at`; else null. `progress_percent`: `processed_files / total_files * 100` when `total_files > 0`, else null.
 - `GET /api/admin/jobs/{job_id}/failures` — Paginated failures (`limit` default **100**, max 500). Optional `warnings` when `scan_failures` is missing. Each row's `error_message` is passed through the same **`sanitize_error_message`** helper used for audit logs (patterns suggesting secrets/tokens are redacted).
 

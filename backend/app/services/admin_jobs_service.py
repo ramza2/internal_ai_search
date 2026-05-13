@@ -12,6 +12,7 @@ from psycopg.rows import dict_row
 
 from app.db.database import get_db_connection
 from app.services.action_log_service import sanitize_error_message
+from app.services.scan_jobs_service import sanitize_job_params_for_response
 from app.schemas.admin_jobs import (
     AdminJobDetailResponse,
     AdminJobFailureItem,
@@ -80,7 +81,7 @@ def _build_job_where(
     return " AND ".join(parts), params
 
 
-_JOB_SELECT_FIELDS = """
+_JOB_SELECT_CORE = """
     sj.id,
     sj.data_source_id,
     ds.name AS data_source_name,
@@ -115,8 +116,45 @@ _JOB_SELECT_FIELDS = """
     au.login_id AS requested_by_login_id,
     au.name AS requested_by_name,
     sj.created_at,
-    sj.updated_at
-"""
+    sj.updated_at"""
+
+_OPTIONAL_SCAN_JOB_FIELDS: list[tuple[str, str, str]] = [
+    ("job_params", "sj.job_params", "NULL::jsonb AS job_params"),
+    ("cancel_requested", "COALESCE(sj.cancel_requested, false) AS cancel_requested", "false AS cancel_requested"),
+    ("worker_id", "sj.worker_id", "NULL::text AS worker_id"),
+    ("heartbeat_at", "sj.heartbeat_at", "NULL::timestamptz AS heartbeat_at"),
+    ("parent_job_id", "sj.parent_job_id", "NULL::uuid AS parent_job_id"),
+    ("pipeline_step", "sj.pipeline_step", "NULL::text AS pipeline_step"),
+    ("retry_count", "COALESCE(sj.retry_count, 0)::int AS retry_count", "0::int AS retry_count"),
+    ("max_retries", "COALESCE(sj.max_retries, 1)::int AS max_retries", "1::int AS max_retries"),
+    ("priority", "COALESCE(sj.priority, 0)::int AS priority", "0::int AS priority"),
+]
+
+
+def _fetch_scan_jobs_columns(cur: Any) -> set[str]:
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'scan_jobs'
+        """
+    )
+    rows = cur.fetchall() or []
+    return {str(r["column_name"]) for r in rows}
+
+
+def _job_select_sql(cols: set[str]) -> str:
+    parts = [_JOB_SELECT_CORE.strip()]
+    for name, present_sql, absent_sql in _OPTIONAL_SCAN_JOB_FIELDS:
+        parts.append(present_sql if name in cols else absent_sql)
+    return ",\n    ".join(parts)
+
+
+def _normalize_job_row(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    if "job_params" in out:
+        out["job_params"] = sanitize_job_params_for_response(out.get("job_params"))
+    return out
 
 
 def list_admin_jobs(
@@ -155,12 +193,15 @@ def list_admin_jobs(
         with get_db_connection() as conn:
             conn.row_factory = dict_row
             with conn.cursor() as cur:
+                cols = _fetch_scan_jobs_columns(cur)
+                sel = _job_select_sql(cols)
+
                 cur.execute(f"SELECT COUNT(*) AS c {base_from}", params)
                 crow = cur.fetchone() or {}
                 total = int(crow.get("c") or 0)
 
                 cur.execute(
-                    f"SELECT {_JOB_SELECT_FIELDS.strip()} {base_from} "
+                    f"SELECT {sel} {base_from} "
                     "ORDER BY sj.created_at DESC NULLS LAST, sj.started_at DESC NULLS LAST "
                     "LIMIT %s OFFSET %s",
                     [*params, lim, off],
@@ -183,7 +224,7 @@ def list_admin_jobs(
             message="Job list is empty",
         )
 
-    items = [AdminJobItem.model_validate(dict(r)) for r in rows]
+    items = [AdminJobItem.model_validate(_normalize_job_row(dict(r))) for r in rows]
     msg = None
     if total == 0 and not warnings:
         msg = "Job list is empty"
@@ -199,8 +240,10 @@ def fetch_admin_job_detail(*, job_id: UUID) -> tuple[AdminJobDetailResponse | No
         with get_db_connection() as conn:
             conn.row_factory = dict_row
             with conn.cursor() as cur:
+                cols = _fetch_scan_jobs_columns(cur)
+                sel = _job_select_sql(cols)
                 cur.execute(
-                    f"SELECT {_JOB_SELECT_FIELDS.strip()} "
+                    f"SELECT {sel} "
                     """
                     FROM scan_jobs sj
                     LEFT JOIN data_sources ds ON ds.id = sj.data_source_id
@@ -227,7 +270,7 @@ def fetch_admin_job_detail(*, job_id: UUID) -> tuple[AdminJobDetailResponse | No
                     logger.debug("failures count: %s", exc, exc_info=False)
                     warnings.append("Could not count scan_failures rows")
 
-                job = AdminJobItem.model_validate(dict(row))
+                job = AdminJobItem.model_validate(_normalize_job_row(dict(row)))
     except psycopg.errors.UndefinedTable:
         logger.warning("admin job detail: scan_jobs unavailable", exc_info=False)
         return None, "scan_jobs_missing"
