@@ -16,15 +16,20 @@ import {
 } from "@/components/ui";
 import type { DataSource, SourceType } from "@/types/dataSource";
 import { formatDateTime } from "@/utils/format";
+import { DocumentProcessModal } from "./DocumentProcessModal";
+import { PipelineRunModal } from "./pipeline/PipelineRunModal";
 
 export function DataSourcesPage() {
   const [items, setItems] = useState<DataSource[]>([]);
   const [loading, setLoading] = useState(true);
+  const [listBusy, setListBusy] = useState(false);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [msgTone, setMsgTone] = useState<"info" | "success" | "danger">("info");
   const [showForm, setShowForm] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
+  const [docModalSource, setDocModalSource] = useState<DataSource | null>(null);
+  const [pipelineSource, setPipelineSource] = useState<DataSource | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     name: "",
@@ -36,8 +41,10 @@ export function DataSourcesPage() {
     description: "",
   });
 
-  async function load() {
-    setLoading(true);
+  async function load(opts?: { initial?: boolean }) {
+    const initial = opts?.initial ?? false;
+    if (initial) setLoading(true);
+    else setListBusy(true);
     setError("");
     try {
       const res = await dsApi.listDataSources(true);
@@ -45,12 +52,13 @@ export function DataSourcesPage() {
     } catch (e) {
       setError(getApiErrorMessage(e));
     } finally {
-      setLoading(false);
+      if (initial) setLoading(false);
+      else setListBusy(false);
     }
   }
 
   useEffect(() => {
-    void load();
+    void load({ initial: true });
   }, []);
 
   function setFlash(text: string, tone: typeof msgTone) {
@@ -129,6 +137,11 @@ export function DataSourcesPage() {
       <PageHeader
         title="데이터 소스 설정"
         description="WebDAV 기반 소스를 등록하고 접속을 검증합니다. App Password 등 비밀 값은 저장 후 다시 표시되지 않습니다."
+        actions={
+          <Button type="button" variant="secondary" size="sm" loading={listBusy} onClick={() => void load()} disabled={loading}>
+            목록 새로고침
+          </Button>
+        }
       />
       <ErrorMessage message={error} />
       {msg && (
@@ -210,7 +223,7 @@ export function DataSourcesPage() {
               <th>루트</th>
               <th>상태</th>
               <th>마지막 테스트</th>
-              <th />
+              <th style={{ minWidth: "14rem" }} />
             </tr>
           </thead>
           <tbody>
@@ -243,6 +256,17 @@ export function DataSourcesPage() {
                   )}
                 </td>
                 <td className="rowActions">
+                  <Button type="button" variant="secondary" size="sm" onClick={() => setPipelineSource(ds)}>
+                    파이프라인 실행
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setDocModalSource(ds)}
+                  >
+                    문서 처리
+                  </Button>
                   <Button
                     type="button"
                     variant="secondary"
@@ -268,6 +292,17 @@ export function DataSourcesPage() {
           </tbody>
         </DataTable>
       </SectionCard>
+
+      {docModalSource && (
+        <DocumentProcessModal dataSource={docModalSource} onClose={() => setDocModalSource(null)} />
+      )}
+      {pipelineSource && (
+        <PipelineRunModal
+          dataSource={pipelineSource}
+          onClose={() => setPipelineSource(null)}
+          onRefresh={() => void load()}
+        />
+      )}
     </div>
   );
 }

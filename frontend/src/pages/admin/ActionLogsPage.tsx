@@ -113,6 +113,21 @@ export function ActionLogsPage() {
 
   const actionTypeOptions = COMMON_ACTION_TYPES.filter(Boolean);
 
+  const pipelineActionTypes = [
+    "WEBDAV_SYNC_TREE",
+    "PROCESS_PENDING_TEXT",
+    "PROCESS_PENDING_DOCUMENTS",
+    "CHUNK_COMPLETED_TEXT",
+    "EMBED_PENDING_CHUNKS",
+  ] as const;
+
+  function applyPipelineLogPreset() {
+    const next = { ...draft, actionType: "WEBDAV_SYNC_TREE" };
+    setDraft(next);
+    setApplied(next);
+    setOffset(0);
+  }
+
   if (loading && items.length === 0) return <Loading />;
 
   return (
@@ -147,6 +162,9 @@ export function ActionLogsPage() {
               ))}
             </Select>
           </FilterField>
+          <Button type="button" variant="secondary" size="sm" onClick={applyPipelineLogPreset} disabled={listBusy}>
+            파이프라인 작업
+          </Button>
           <FilterField label="result">
             <Select
               value={draft.result}
@@ -230,6 +248,16 @@ export function ActionLogsPage() {
             필터 초기화
           </Button>
         </FilterBar>
+        <p className="muted" style={{ margin: "0.5rem 0 0", fontSize: "0.8rem" }}>
+          <strong>파이프라인 작업</strong> 프리셋은 <code>WEBDAV_SYNC_TREE</code>로 필터를 맞춘 뒤 조회합니다. API는{" "}
+          <code>action_type</code> 단일값만 받으므로, 다른 단계는 드롭다운에서{" "}
+          {pipelineActionTypes.map((t) => (
+            <code key={t} style={{ marginRight: "0.25rem" }}>
+              {t}
+            </code>
+          ))}
+          로 바꿔 순차 확인하세요.
+        </p>
         <p className="muted" style={{ margin: "0.5rem 0 0" }}>
           총 <strong>{total.toLocaleString("ko-KR")}</strong>건
           {listBusy ? " · 불러오는 중…" : ""}

@@ -21,7 +21,7 @@ Vite + React + TypeScript 기반 웹 UI. 백엔드(FastAPI)와 JWT 인증으로 
 | 공개 | `/login`, `/signup` | 로그인·회원가입 |
 | 인증 후 | `/change-password` | 비밀번호 변경(강제 시 안내) |
 | 사용자 | `/search`, `/answer`, `/files/:fileId/preview` | 통합 검색, AI 질문, 미리보기 |
-| 관리자 | `/admin`, `/admin/data-sources`, `/admin/file-stats`, `/admin/users`, `/admin/action-logs` | 대시보드(파일 통계), 데이터 소스, 파일 통계, 사용자, 작업 로그 |
+| 관리자 | `/admin`, `/admin/data-sources`, `/admin/file-stats`, `/admin/users`, `/admin/action-logs` | 대시보드(요약 API), 데이터 소스, 파일 통계, 사용자, 작업 로그 |
 
 ## 인증·권한 흐름 (유지)
 
@@ -31,6 +31,12 @@ Vite + React + TypeScript 기반 웹 UI. 백엔드(FastAPI)와 JWT 인증으로 
 4. 비밀번호 변경 후 역할에 따라 **`/admin`** 또는 **`/search`**.
 5. API **401**(로그인·회원가입·비밀번호 변경 제외) 시 토큰 삭제 후 **`/login`**.
 6. `/admin/*`는 `AdminRoute`로 **ADMIN**만. 일반 사용자는 `/search`로 리다이렉트.
+
+## 관리자 대시보드 (`/admin`)
+
+- **`GET /api/admin/dashboard/summary`** 한 번으로 사용자·데이터 소스·파일(`analysis_status`별)·chunk/embedding·최근 24시간 활동(`SEARCH` / `RAG_QUESTION` / `LOGIN` / 실패 건수)·최근 스캔 작업 5건·최근 감사 로그 10건(본문 `detail` 없음)·문제 지표 카드용 카운트를 받습니다.
+- 화면: `PageHeader`(설명 + **새로고침**), `SectionCard` + `StatCard` 그리드, 문제 항목별 **관리 페이지 링크**, `DataTable` 두 개(스캔 작업 / 최근 활동), 하단 **바로 가기** 카드. **차트 라이브러리는 사용하지 않음**(카드·테이블만).
+- 최초 `Loading`, API 실패 시 `ErrorMessage` + 다시 시도, 스캔/활동 테이블은 빈 배열이면 `EmptyState`. 새로고침 중 버튼 비활성화.
 
 ## 설치·실행
 
@@ -76,6 +82,7 @@ npm run preview
 ## 작업 로그 (`/admin/action-logs`)
 
 - **필터:** user_id, action_type(선택 상수 + 전체), result, data_source, target_file_id, keyword, from_date, to_date, limit(20/50/100/200).
+- **파이프라인 작업** 프리셋: `WEBDAV_SYNC_TREE`로 `action_type`을 맞춘 뒤 조회합니다. API는 `action_type` **단일값**만 받으므로, `PROCESS_PENDING_TEXT`, `PROCESS_PENDING_DOCUMENTS`, `CHUNK_COMPLETED_TEXT`, `EMBED_PENDING_CHUNKS` 등은 드롭다운에서 바꿔 순차 확인합니다.
 - **조회** 시에만 적용 필터가 반영되며 offset은 0으로 리셋됩니다. **필터 초기화**로 전부 초기화합니다.
 - **PaginationBar:** offset 기반 이전/다음, 현재 페이지·총 건수 표시. `total`으로 마지막 페이지를 계산합니다.
 - 상세 JSON은 행 **펼치기**로 유지합니다.
@@ -86,10 +93,47 @@ npm run preview
 - **PaginationBar** + API `total` 표시. 승인·역할 변경 등 작업 후 **현재 필터·offset**을 유지한 채 목록만 다시 불러옵니다.
 - **StatusBadge / RoleBadge**로 상태·역할 표시. 마지막 관리자 보호 등 API 오류는 **ErrorMessage**로 구분 표시(목록 로드 오류와 별도).
 
+## 문서 파일 처리 UI (`/admin/data-sources`)
+
+- 각 데이터 소스 행의 **문서 처리** → 모달 **문서 파일 처리**에서 `POST /api/data-sources/{id}/process-pending-documents`를 호출합니다(`src/api/dataSourceApi.ts`의 `processPendingDocuments`).
+- **지원 포맷:** PDF, DOCX, XLSX, PPTX, HWPX.
+- **미지원:** HWP, DOC, XLS, PPT.
+- **HWP Automation/COM 미사용**, HWPX는 ZIP/XML 기반(백엔드와 동일 정책). OCR 없음.
+- **dry_run:** 「대상 확인」으로 `dry_run=true` 호출 — 다운로드·DB 반영 없이 대상만 확인.
+- **reprocess_skipped:** 기존 `UNSUPPORTED_EXTENSION`으로 스킵된 지원 확장자 파일을 다시 처리할 때 사용.
+- 실제 추출 후 검색/RAG에는 **Chunk 생성**(`chunk-completed-text`)과 **Embedding**(`embed-pending-chunks`)이 필요합니다. 모달에서 성공 시 후속 실행 버튼을 제공합니다.
+
+## 인덱싱 파이프라인 실행 UI (`/admin/data-sources`)
+
+- 각 데이터 소스 행의 **파이프라인 실행** → 오버레이 모달에서 다음 순서로 **수동** 또는 **권장 순서로 전체 자동** 실행할 수 있습니다: (1) `sync-tree` (2) `process-pending-text` (3) `process-pending-documents` — 공통 `DocumentProcessingPanel` 재사용 (4) `chunk-completed-text` (5) `embed-pending-chunks`.
+- **dry_run:** 텍스트·문서·Chunk·Embedding 단계의 **대상 확인** 버튼은 서버가 대상만 계산하고 DB/다운로드를 바꾸지 않는 호출입니다. **실제 실행**은 DB·파일 처리가 일어날 수 있으며 공통 확인 다이얼로그를 거칩니다. **sync-tree**는 dry_run이 없으므로 **동기화 실행** 전에 옵션을 확인하세요.
+- **권장 순서로 전체 실행:** 모달 상단 버튼으로 위 5단계를 **브라우저에서 순차 호출**합니다. 각 카드에 입력한 옵션(limit, 경로, 확장자 등)은 그대로 쓰이며, **자동 실행만 `dry_run=false`로 강제**됩니다(카드에 dry_run이 켜져 있어도 무시). 자동 실행 전에는 단계별 **대상 확인(dry_run)** 을 권장합니다.
+- **중간 실패:** 어느 단계든 HTTP 오류·예외·또는 응답 `status === "error"` 이면 그 단계는 `error`, 이후 단계는 `skipped` 로 표시하고 자동 실행을 중단합니다. 응답 `status === "partial"` 인 경우에는 경고 문구를 남기고 **다음 단계는 계속 진행**합니다(`failed_count`가 커도 동일).
+- **진행·소요 시간:** 자동 실행 중 상단에 완료 수·현재 단계·실패/건너뜀 수·프로그레스 바를 표시하고, 단계별 카드에 시작/종료 시각·`formatDuration(ms)` 기반 소요 시간(`950ms`, `3.2s`, `1m 12s` 등)을 표시합니다. 자동 실행이 끝나면 성공/실패 요약과 총 소요 시간을 보여 줍니다.
+- **실행 방식 한계:** 백그라운드 큐가 아니라 **탭이 열려 있는 동안의 순차 HTTP 요청**입니다. 대량 데이터는 이후 백그라운드 워커로 분리하는 것이 TODO입니다.
+- 단계별 응답은 각 카드 아래에 요약·경고·`items` 상위 20건(초과 시 안내 문구)으로 표시합니다. 상단 바에 마지막 실행 단계/결과·완료·실패 단계 수를 표시합니다.
+- **현재 파일 현황 보기**는 `GET /api/data-sources/{id}/file-stats`를 호출합니다. 단계 **수동** 실행 후에는 기존과 같이 `onRefresh`로 목록을 갱신합니다. **자동 실행**이 모두 끝난 뒤에도 한 번 갱신하며, 화면 상단 **목록 새로고침**으로 데이터 소스 테이블을 다시 불러올 수 있습니다.
+- 자동 실행 중에는 닫기·전체 실행·각 단계 실행 버튼이 비활성화되고, 문서 단계 패널의 실행 버튼도 비활성화됩니다.
+
 ## 데이터 소스 API 구분
 
 - **검색·AI 질문:** `useSearchDataSources()` → `GET /api/search/data-sources` — 일반 **USER**도 호출 가능(ACTIVE + 비밀번호 변경 완료). 응답에는 `id`, `name`, `source_type`, `description`, `last_scan_at`, `last_connection_success`만 포함됩니다.
 - **관리자 화면** (`DataSourcesPage`, 작업 로그 필터, 파일 통계 소스 선택 등): `useDataSources()` → `GET /api/data-sources` — **ADMIN** 전용 CRUD 목록(기존과 동일).
+
+### 관리자용 문서 처리 API (curl)
+
+백엔드 **Step 21** `process-pending-documents`는 UI 버튼 없이도 curl로 호출할 수 있습니다. 인제스트 후에는 `chunk-completed-text` → `embed-pending-chunks` 순으로 이어가면 검색/RAG에 반영됩니다.
+
+```bash
+curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-documents?limit=20&include_extensions=pdf,docx,hwpx" \
+  -H "Authorization: Bearer <admin-token>"
+
+curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-documents?reprocess_skipped=true&include_extensions=pdf,docx,xlsx,pptx,hwpx" \
+  -H "Authorization: Bearer <admin-token>"
+
+curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-documents?dry_run=true" \
+  -H "Authorization: Bearer <admin-token>"
+```
 
 ## 파일 통계 (`/admin/file-stats`)
 
@@ -98,14 +142,16 @@ npm run preview
 - 상단에서 소스 선택·삭제 포함 체크박스·새로고침.
 - 요약 카드: 전체 항목, 파일 수, 디렉터리 수, 전체 용량, 마지막 동기화(+ 파일 최근 수정 힌트).
 - 테이블: 분석 상태·파일 유형·확장자·대용량 TOP. TOP 목록은 확장자 휴리스틱으로 **텍스트 미리보기** 가능 시 `/files/{id}/preview` 링크.
+- **문서 처리·스킵 안내** 카드: `SKIPPED` 건수·PDF 등 문서형 확장자 처리 안내(데이터 소스의 **문서 처리**로 연결).
 
 ## 타입 (`src/types`)
 
-- `search.ts`, `answer.ts`, `admin.ts`, `dataSource.ts`(`AdminDataSource` 별칭), **`searchDataSource.ts`**(`SearchDataSource`), `file.ts`에 요청/응답 스키마를 맞춰 두었습니다.
+- `search.ts`, `answer.ts`, `admin.ts`, `adminDashboard.ts`, `dataSource.ts`(`AdminDataSource` 별칭), **`searchDataSource.ts`**(`SearchDataSource`), `file.ts`, **`documentProcessing.ts`**, **`pipeline.ts`**, **`syncTree.ts`**, **`textProcessing.ts`**, **`chunking.ts`**, **`embedding.ts`** 에 요청/응답·파이프라인 UI 상태 타입을 맞춰 두었습니다.
 
 ## 아직 남은 TODO (프론트)
 
 - **URL query state**와 필터·페이지(offset) 동기화 — 작업 로그·사용자 관리 등에 TODO 주석으로 표시해 두었습니다.
+- 인덱싱 파이프라인 **백그라운드 워커**(대량 데이터 시 브라우저 세션과 분리).
 - **차트 라이브러리** 도입(파일 통계 시각화).
 - **모바일 햄버거 메뉴** 등 본격 반응형.
 - 미리보기 **쿼리 하이라이트** 정밀(offset 기반).

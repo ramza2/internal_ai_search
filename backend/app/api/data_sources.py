@@ -6,7 +6,8 @@ into the ``files`` table via a one-level sync, walks the tree with a
 bounded BFS recursive sync (PROPFIND Depth: 1 per folder, ``max_depth`` /
 ``max_items``-limited) with opt-in soft-mark deletion detection
 (``detect_deleted``), downloads PENDING text files into ``file_contents``
-via the Step-12 processor, slices the resulting ``extracted_text`` into
+via the Step-12 text processor, downloads PENDING (or re-eligible SKIPPED)
+binary office documents via the document processor, slices the resulting ``extracted_text`` into
 ``document_chunks`` via the Step-13 chunker, and embeds those chunks into
 ``document_chunks.embedding vector(1024)`` via the Step-14 embedder
 (bumping ``files.last_indexed_at`` once every chunk of that file has a
@@ -51,6 +52,9 @@ from app.services.chunk_text_processor_service import (
 from app.services.file_recursive_sync_service import run_webdav_recursive_sync
 from app.services.file_stats_service import get_file_statistics
 from app.services.file_sync_service import run_webdav_root_sync
+from app.services.pending_document_processor_service import (
+    run_process_pending_documents,
+)
 from app.services.pending_text_processor_service import (
     run_process_pending_text,
 )
@@ -472,6 +476,86 @@ def process_data_source_pending_text(
             request=request,
             admin=admin,
             action_type="PROCESS_PENDING_TEXT",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message=str(exc),
+        )
+        return _srv_err_resp(exc)
+
+
+@router.post("/{data_source_id}/process-pending-documents", response_model=None)
+def process_data_source_pending_documents(
+    request: Request,
+    data_source_id: UUID,
+    admin: CurrentUserContext = Depends(require_admin_user),
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
+    max_file_size_bytes: Annotated[int, Query(ge=1, le=268_435_456)] = 52_428_800,
+    include_extensions: Annotated[str | None, Query()] = None,
+    dry_run: Annotated[bool, Query()] = False,
+    reprocess_skipped: Annotated[bool, Query()] = False,
+) -> JSONResponse:
+    """Download PENDING (or SKIPPED/UNSUPPORTED) document files into ``file_contents``.
+
+    Uses the parser registry (PDF, DOCX, XLSX, PPTX, HWPX). No OCR, no HWP
+    binary/COM. Each file uses a short DB transaction; credentials are never
+    logged or echoed in error payloads.
+    """
+    try:
+        ext_set = parse_include_extensions(include_extensions)
+        payload, code = run_process_pending_documents(
+            settings,
+            data_source_id,
+            limit=limit,
+            max_file_size_bytes=max_file_size_bytes,
+            include_extensions=ext_set,
+            dry_run=dry_run,
+            reprocess_skipped=reprocess_skipped,
+        )
+        body = payload if isinstance(payload, dict) else None
+        doc_detail: dict[str, Any] = {
+            "limit": limit,
+            "dry_run": dry_run,
+            "reprocess_skipped": reprocess_skipped,
+            "include_extensions": (
+                ",".join(sorted(ext_set)) if ext_set else None
+            ),
+        }
+        if isinstance(body, dict):
+            for key in (
+                "target_count",
+                "completed_count",
+                "skipped_count",
+                "failed_count",
+            ):
+                if key in body:
+                    doc_detail[key] = body.get(key)
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="PROCESS_PENDING_DOCUMENTS",
+            data_source_id=data_source_id,
+            result=_op_result(code, body),
+            detail=doc_detail,
+            error_message=(body or {}).get("message") if isinstance(body, dict) else None,
+        )
+        return JSONResponse(status_code=code, content=payload)
+    except datasource_svc.DataSourceNotFound:
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="PROCESS_PENDING_DOCUMENTS",
+            data_source_id=data_source_id,
+            result="FAIL",
+            detail=None,
+            error_message="Data source not found",
+        )
+        return _not_found_resp()
+    except Exception as exc:  # pragma: no cover
+        _log_op(
+            request=request,
+            admin=admin,
+            action_type="PROCESS_PENDING_DOCUMENTS",
             data_source_id=data_source_id,
             result="FAIL",
             detail=None,

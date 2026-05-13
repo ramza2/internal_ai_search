@@ -47,6 +47,32 @@ _FETCH_PENDING_TAIL = """
     LIMIT %s
 """
 
+_FETCH_PENDING_DOCUMENTS_SQL = """
+    SELECT
+        id,
+        remote_path,
+        filename,
+        extension,
+        size_bytes,
+        content_hash
+    FROM files
+    WHERE data_source_id = %s
+      AND is_directory = FALSE
+      AND remote_path IS NOT NULL
+      AND analysis_status IS DISTINCT FROM 'DELETED'::analysis_status
+      AND lower(nullif(trim(extension), '')) = ANY(%s)
+      AND (
+            analysis_status = 'PENDING'::analysis_status
+         OR (
+             %s
+             AND analysis_status = 'SKIPPED'::analysis_status
+             AND analysis_error_code = 'UNSUPPORTED_EXTENSION'
+         )
+      )
+    ORDER BY updated_at ASC NULLS FIRST, remote_path ASC
+    LIMIT %s
+"""
+
 
 UPSERT_FILE_CONTENT_SQL = """
 INSERT INTO file_contents (
@@ -145,6 +171,31 @@ def fetch_pending_files(
         conn.row_factory = dict_row
         with conn.cursor() as cur:
             cur.execute(sql, params)
+            rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+def fetch_pending_document_files(
+    *,
+    ds_id: UUID,
+    limit: int,
+    document_extensions: frozenset[str],
+    reprocess_skipped: bool,
+) -> list[dict[str, Any]]:
+    """Return PENDING (and optionally SKIPPED/UNSUPPORTED) document rows.
+
+    ``document_extensions`` must be a non-empty normalized lowercase set
+    (typically ``supported_document_extensions()`` intersected with the
+    caller's ``include_extensions`` filter).
+    """
+    if not document_extensions:
+        return []
+    exts = sorted(document_extensions)
+    params: list[Any] = [ds_id, exts, bool(reprocess_skipped), int(limit)]
+    with get_db_connection() as conn:
+        conn.row_factory = dict_row
+        with conn.cursor() as cur:
+            cur.execute(_FETCH_PENDING_DOCUMENTS_SQL, params)
             rows = cur.fetchall()
     return [dict(r) for r in rows]
 

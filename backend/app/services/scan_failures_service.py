@@ -16,6 +16,12 @@ Step 12 records:
 
 ``UNSUPPORTED_EXTENSION`` is intentionally **not** persisted here: a
 single PDF-heavy share would otherwise drown the table.
+
+Document processing (``process-pending-documents``) additionally records:
+
+- ``PARSING_FAILED``
+- ``PASSWORD_PROTECTED``
+- ``NO_EXTRACTABLE_TEXT``
 """
 
 from __future__ import annotations
@@ -49,6 +55,9 @@ _PERSISTABLE_ERROR_CODES: frozenset[str] = frozenset(
         "DECODING_FAILED",
         "FILE_TOO_LARGE",
         "BINARY_CONTENT_DETECTED",
+        "PARSING_FAILED",
+        "PASSWORD_PROTECTED",
+        "NO_EXTRACTABLE_TEXT",
     }
 )
 

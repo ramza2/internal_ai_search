@@ -22,6 +22,7 @@ This backend follows a phased roadmap. Implemented so far:
 - **Step 18:** File / chunk preview — `GET /api/files/{file_id}/preview` and `GET /api/files/{file_id}/chunks/{chunk_id}/preview` return metadata plus a **bounded** (`max_chars`) line-numbered slice of `file_contents.extracted_text` for UI click-through from search / RAG citations. Optional `query` adds offset-only highlights (no HTML). `open_info` carries credential-free WebDAV URL parts. **No** WebDAV download, file mutation, or RBAC yet.
 - **Step 19:** Auth + admin users — `POST /api/auth/signup` (PENDING user), `POST /api/auth/login` (JWT for ACTIVE only), `GET /api/auth/me`, `POST /api/auth/change-password`, and admin-only `GET/PATCH /api/admin/users/...` (approve, activate, deactivate, lock, role). Startup bootstraps the first `ADMIN` from `INITIAL_ADMIN_*` when none exists (`must_change_password=true`). Dependencies: `bcrypt`, `PyJWT`. **No** SSO/LDAP, email verify, MFA, or refresh tokens yet.
 - **Step 20:** RBAC on existing APIs + `action_logs` audit (1st pass) — `POST /api/search`, `POST /api/answer`, and file preview routes require a logged-in user with `must_change_password=false`; `GET /api/search/data-sources` (read-only active sources for Search / Answer UI filters, **no** secrets) uses the same user gate and is **excluded** from `action_logs` because the UI may call it frequently. All `/api/data-sources/*`, `GET /api/files/stats`, `GET /api/data-sources/{id}/file-stats`, `/api/admin/users/*`, and `GET /api/admin/action-logs` require **ACTIVE** **ADMIN** with password change cleared. Health + `POST /api/auth/signup` + `POST /api/auth/login` stay public. Best-effort writes to `action_logs` (`db/migrations/020_action_logs.sql`) for auth, search, RAG, preview, admin user actions, and data-source operations; **no** secrets or full LLM bodies in `detail`. Admin log viewer records `ACTION_LOG_VIEW` with minimal filter metadata.
+- **Step 21:** Document parser adapters + `POST /api/data-sources/{id}/process-pending-documents` — pluggable parsers under `app/parsers/` extract first-pass text from **PDF** (`pypdf`), **DOCX** (`python-docx`), **XLSX** (`openpyxl`), **PPTX** (`python-pptx`), and **HWPX** (stdlib `zipfile` + `xml.etree`, no HWP Automation/COM). Bodies are downloaded via the same WebDAV GET helper as Step 12, upserted into `file_contents`, and `files` transitions mirror the agreed skip/fail semantics (`NO_EXTRACTABLE_TEXT`, `PASSWORD_PROTECTED`, `FILE_TOO_LARGE`, …). **HWP** (binary), legacy **DOC/XLS/PPT**, OCR, and Windows-only stacks are out of scope. Chunking, embedding, and search logic are unchanged.
 
 ## Project structure
 
@@ -48,6 +49,17 @@ backend/
 │  │  ├─ __init__.py
 │  │  ├─ ollama_embedding_client.py
 │  │  └─ health.py
+│  ├─ parsers/
+│  │  ├─ __init__.py
+│  │  ├─ base.py
+│  │  ├─ registry.py
+│  │  ├─ plain_text_parser.py
+│  │  ├─ pdf_parser.py
+│  │  ├─ docx_parser.py
+│  │  ├─ xlsx_parser.py
+│  │  ├─ pptx_parser.py
+│  │  ├─ hwpx_parser.py
+│  │  └─ unsupported_parser.py
 │  ├─ webdav/
 │  │  ├─ __init__.py
 │  │  ├─ client.py
@@ -57,6 +69,7 @@ backend/
 │  │  └─ recursive_listing.py
 │  ├─ api/
 │  │  ├─ admin_action_logs.py
+│  │  ├─ admin_dashboard.py
 │  │  ├─ admin_users.py
 │  │  ├─ answer.py
 │  │  ├─ auth.py
@@ -66,6 +79,7 @@ backend/
 │  │  └─ search.py
 │  ├─ services/
 │  │  ├─ action_log_service.py
+│  │  ├─ admin_dashboard_service.py
 │  │  ├─ admin_users_service.py
 │  │  ├─ auth_bootstrap_service.py
 │  │  ├─ auth_service.py
@@ -84,6 +98,7 @@ backend/
 │  │  ├─ file_sync_service.py
 │  │  ├─ files_deletion_service.py
 │  │  ├─ files_upsert.py
+│  │  ├─ pending_document_processor_service.py
 │  │  ├─ pending_text_processor_service.py
 │  │  ├─ rag_answer_service.py
 │  │  ├─ scan_failures_service.py
@@ -96,6 +111,7 @@ backend/
 │  │  ├─ highlight.py
 │  │  └─ snippet.py
 │  └─ schemas/
+│     ├─ admin_dashboard.py
 │     ├─ answer.py
 │     ├─ auth.py
 │     ├─ data_source.py
@@ -175,7 +191,7 @@ Recognized variables (override as needed):
 
 ### WebDAV probe, listing, and sync (Steps 6–8, 10)
 
-- `WEBDAV_TIMEOUT_SECONDS` — per-`PROPFIND` HTTP timeout (seconds). Applied to `test-connection`, `list-root`, `sync-root`, **and every per-folder PROPFIND during `sync-tree`** (each folder gets its own request). The same timeout also bounds every per-file `GET` issued by `process-pending-text` in Step 12.
+- `WEBDAV_TIMEOUT_SECONDS` — per-`PROPFIND` HTTP timeout (seconds). Applied to `test-connection`, `list-root`, `sync-root`, **and every per-folder PROPFIND during `sync-tree`** (each folder gets its own request). The same timeout also bounds every per-file `GET` issued by `process-pending-text` (Step 12) and **`process-pending-documents` (Step 21)**.
 
 ### Ollama (Step 2)
 
@@ -584,12 +600,45 @@ curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-text?i
 curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-text?dry_run=true"
 ```
 
+### PENDING document processing (`POST /api/data-sources/{id}/process-pending-documents`, Step 21)
+
+Linux-friendly **document parser adapters** live under `app/parsers/`. Each parser implements `supports(extension, mime_type)` and `parse_bytes(...)`, registered by `registry.get_parser_for_extension`. This endpoint **does not** use HWP Automation/COM, OCR, or legacy OLE **DOC/XLS/PPT** parsers.
+
+**Supported formats (1st pass):** `pdf`, `docx`, `xlsx`, `pptx`, `hwpx`
+
+**Still unsupported (remain `SKIPPED` / `UNSUPPORTED_EXTENSION` until a later milestone):** `hwp` (binary), `doc`, `xls`, `ppt` (legacy binary)
+
+**Typical indexing pipeline after documents:**
+
+1. `POST /api/data-sources/{id}/process-pending-documents` — fill `file_contents` for office documents.
+2. `POST /api/data-sources/{id}/chunk-completed-text?reprocess=false` — chunk `COMPLETED` files that have `extracted_text`.
+3. `POST /api/data-sources/{id}/embed-pending-chunks` — write vectors.
+4. `POST /api/search` or `POST /api/answer` — retrieval / RAG.
+
+**`reprocess_skipped`:** when `true`, rows with `analysis_status='SKIPPED'` **and** `analysis_error_code='UNSUPPORTED_EXTENSION'` whose extension is one of the supported document extensions above are eligible again (so PDFs/DOCX that were skipped before parsers existed can be ingested without manual SQL).
+
+```bash
+curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-documents?limit=20&include_extensions=pdf,docx,hwpx" \
+  -H "Authorization: Bearer <admin-token>"
+
+curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-documents?reprocess_skipped=true&include_extensions=pdf,docx,xlsx,pptx,hwpx" \
+  -H "Authorization: Bearer <admin-token>"
+
+curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-documents?dry_run=true" \
+  -H "Authorization: Bearer <admin-token>"
+```
+
+- **Target query** — `data_source_id = {id}`, `is_directory = FALSE`, `remote_path IS NOT NULL`, `analysis_status <> 'DELETED'`, extension in the supported set (optionally narrowed by `include_extensions`), and either `analysis_status = 'PENDING'` or (`reprocess_skipped=true` AND `analysis_status='SKIPPED'` AND `analysis_error_code='UNSUPPORTED_EXTENSION'`).
+- **Query parameters:** `limit` (default **50**, **1–500**), `max_file_size_bytes` (default **52_428_800** = 50 MB), optional `include_extensions`, `dry_run`, `reprocess_skipped`.
+- **Per-file outcomes:** success → `COMPLETED` + `file_contents` upsert + SHA-256 `content_hash` on `files`; password-protected → `FAILED` / `PASSWORD_PROTECTED`; parse errors → `FAILED` / `PARSING_FAILED`; empty extractable text (e.g. image-only PDF) → `SKIPPED` / `NO_EXTRACTABLE_TEXT`; over size cap → `SKIPPED` / `FILE_TOO_LARGE`; unsupported extension (defensive) → `SKIPPED` / `UNSUPPORTED_EXTENSION` with message `Unsupported document extension`.
+- **`scan_jobs` / `scan_failures`:** same best-effort pattern as Step 12; failures may record `PARSING_FAILED`, `PASSWORD_PROTECTED`, `FILE_TOO_LARGE`, `NO_EXTRACTABLE_TEXT` (not `UNSUPPORTED_EXTENSION`).
+
 #### `document_chunks` lifecycle (Steps 13 + 14)
 
 - **Step 13** fills `document_chunks` rows from `file_contents.extracted_text` and leaves `document_chunks.embedding = NULL`.
 - **Step 14** (`embed-pending-chunks`) embeds those rows into `document_chunks.embedding vector(1024)` and bumps `files.last_indexed_at` once every chunk of a file carries a non-`NULL` vector. That `last_indexed_at` value is the project's "ready for search" flag — Step 14 is the only place that sets it.
 - `DELETED` files (from Step 11) must have their `document_chunks` deactivated or deleted; RAG retrieval must filter them out before scoring. The current chunker / embedder only acts on `COMPLETED` rows, so DELETED files never gain new chunks or vectors — but a delete-side cleaner is still required when retrieval lands.
-- `SKIPPED / UNSUPPORTED_EXTENSION` rows wait for the PDF/DOCX/HWP/XLSX parsers, after which they will be reset to `PENDING`, then re-processed by `process-pending-text`, chunked by `chunk-completed-text`, and finally embedded by `embed-pending-chunks`.
+- `SKIPPED / UNSUPPORTED_EXTENSION` **binary office** rows (`pdf`, `docx`, …) can be reprocessed with **`process-pending-documents?reprocess_skipped=true`** (Step 21). Plain-text rows stay on **`process-pending-text`** (Step 12). After `files.analysis_status='COMPLETED'` and `file_contents` exist, run **`chunk-completed-text`** then **`embed-pending-chunks`**.
 
 ### Chunk generation (`POST /api/data-sources/{id}/chunk-completed-text`, Step 13)
 
@@ -1023,9 +1072,13 @@ curl "http://localhost:8000/api/files/{file_id}/chunks/{chunk_id}/preview?contex
 
 **Admin APIs:** `GET /api/admin/users` and `PATCH .../approve|deactivate|lock|activate|role` require **`ACTIVE` + `ADMIN` + `must_change_password=false`**. Query filters: `status`, `role`, `keyword`, `limit` (≤200), `offset`. Each mutating PATCH emits `USER_APPROVE`, `USER_DEACTIVATE`, `USER_LOCK`, `USER_ACTIVATE`, or `USER_ROLE_CHANGE`.
 
+**Admin dashboard summary:** `GET /api/admin/dashboard/summary` — same **ACTIVE ADMIN** gate. Returns aggregated **users** (counts by `status`, plus `ADMIN` role count), **data_sources** (total / active / inactive / last-connection buckets), **files** (totals, `analysis_status` breakdown including `DELETED`, total size + humanized string), **document_chunks** (total / embedded / pending embedding), **last-24h activity** from `action_logs` (`SEARCH`, `RAG_QUESTION`, `LOGIN`, `FAIL` counts), **recent_scan_jobs** (latest 5 with `data_source_name` via `LEFT JOIN`; empty when `scan_jobs` is missing), and **recent_actions** (latest 10 with `user_name` / `login_id` — **no** `detail` payload). **`problem_items`** surfaces quick counts for follow-up (pending users, failed/pending files, pending embeddings, inactive sources). **Not** written to `action_logs` — the admin home screen may refresh often.
+
 **Admin audit viewer:** `GET /api/admin/action-logs` — same admin gate. Query: `user_id`, `action_type`, `result` (`SUCCESS`|`FAIL`), `data_source_id`, `target_file_id`, `keyword` (ILIKE on `search_query`, `target_file_path`, `detail::text`), `from_date`, `to_date` (ISO datetime or `YYYY-MM-DD`), `limit` (default 50, max 200), `offset`. Each successful listing appends an `ACTION_LOG_VIEW` row with **compact** `detail.filters` (no raw keyword text). Listing failures return **500**.
 
 **Data sources (Step 20):** All `/api/data-sources/*` routes require **ACTIVE ADMIN** with password change cleared. **No** credential material or `Authorization` header is written to `action_logs`.
+
+**`PROCESS_PENDING_DOCUMENTS` (Step 21):** `POST /api/data-sources/{id}/process-pending-documents` emits `PROCESS_PENDING_DOCUMENTS` with `detail` containing `limit`, `dry_run`, `reprocess_skipped`, normalized `include_extensions` (comma-separated), and when the JSON body is available also `target_count`, `completed_count`, `skipped_count`, `failed_count`. **Never** stores credentials, raw file bytes, or `extracted_text`.
 
 **Search / RAG / preview (Step 20):** `POST /api/search`, `POST /api/answer`, and both preview URLs require **ACTIVE** JWT user with **`must_change_password=false`**. Successful search emits `SEARCH` with `search_query`, counts, and mode metadata (no full chunk text). RAG emits `RAG_QUESTION` with retrieval/LLM metadata only (no prompt, no answer body). Preview emits `FILE_PREVIEW` with `target_file_id` / path and window parameters (no `preview.text`).
 

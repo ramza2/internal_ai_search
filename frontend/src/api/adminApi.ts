@@ -5,6 +5,7 @@ import type {
   AdminUserRow,
   AdminUsersListResponse,
 } from "@/types/admin";
+import type { DashboardSummaryResponse } from "@/types/adminDashboard";
 
 export async function listAdminUsers(params: {
   status?: string;
@@ -66,5 +67,10 @@ export async function listActionLogs(params: ActionLogsQueryParams): Promise<Act
   const { data } = await httpClient.get<ActionLogsListResponse>("/api/admin/action-logs", {
     params,
   });
+  return data;
+}
+
+export async function getDashboardSummary(): Promise<DashboardSummaryResponse> {
+  const { data } = await httpClient.get<DashboardSummaryResponse>("/api/admin/dashboard/summary");
   return data;
 }

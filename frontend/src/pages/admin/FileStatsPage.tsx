@@ -76,6 +76,9 @@ export function FileStatsPage() {
 
   const { summary, by_analysis_status, by_file_type, by_extension, top_largest_files, scope, by_data_source } = data;
 
+  const skippedCount =
+    by_analysis_status.find((r) => String(r.status).toUpperCase() === "SKIPPED")?.count ?? 0;
+
   const syncHint = summary.latest_modified_at
     ? `파일 최근 수정: ${formatDateTime(summary.latest_modified_at)}`
     : undefined;
@@ -127,6 +130,22 @@ export function FileStatsPage() {
         <StatCard label="전체 용량" value={summary.total_size_human} hint={formatInt(summary.total_size_bytes) + " bytes"} />
         <StatCard label="마지막 동기화" value={summary.last_synced_at ? formatDateTime(summary.last_synced_at) : "—"} hint={syncHint} />
       </div>
+
+      <SectionCard title="문서 처리·스킵 안내">
+        <p className="muted" style={{ marginTop: 0 }}>
+          PDF, DOCX, XLSX, PPTX, HWPX 파일이 <code>SKIPPED</code> / <code>UNSUPPORTED_EXTENSION</code> 등으로 남아 있다면,{" "}
+          <Link to="/admin/data-sources">데이터 소스</Link> 화면에서 해당 소스의 <strong>문서 처리</strong>를 실행해 텍스트를 추출한 뒤 Chunk·Embedding 단계를
+          거치면 검색·RAG 대상으로 전환할 수 있습니다.
+        </p>
+        <p className="muted" style={{ marginBottom: 0 }}>
+          HWP, DOC, XLS, PPT는 아직 미지원입니다. HWP Automation/COM은 사용하지 않습니다.
+        </p>
+        {skippedCount > 0 && (
+          <p style={{ marginTop: "0.65rem", fontSize: "0.875rem" }}>
+            현재 조회 범위에서 <strong>SKIPPED</strong> 파일은 <strong>{formatInt(skippedCount)}</strong>건입니다.
+          </p>
+        )}
+      </SectionCard>
 
       {by_data_source && by_data_source.length > 0 && !scopeKey && (
         <SectionCard title="데이터 소스별 요약">

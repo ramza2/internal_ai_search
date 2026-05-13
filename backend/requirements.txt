@@ -6,3 +6,7 @@ httpx
 cryptography
 bcrypt
 PyJWT
+pypdf
+python-docx
+openpyxl
+python-pptx
