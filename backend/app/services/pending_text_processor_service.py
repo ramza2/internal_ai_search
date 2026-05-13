@@ -164,6 +164,7 @@ def run_process_pending_text(
     max_file_size_bytes: int,
     include_extensions: frozenset[str] | None,
     dry_run: bool,
+    requested_by: UUID | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Drive a synchronous batch of PENDING file processing.
 
@@ -267,7 +268,11 @@ def run_process_pending_text(
             max_file_size_bytes=eff_size_cap,
         ), 200
 
-    scan_job_id = scan_jobs_service.create_scan_job(ds_id=ds_id)
+    scan_job_id = scan_jobs_service.create_scan_job(
+        ds_id=ds_id,
+        job_type=scan_jobs_service.JOB_TYPE_PROCESS_PENDING_TEXT,
+        requested_by=requested_by,
+    )
 
     items: list[dict[str, Any]] = []
     completed_count = 0

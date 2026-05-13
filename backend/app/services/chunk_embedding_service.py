@@ -176,6 +176,7 @@ def run_embed_pending_chunks(
     reembed: bool,
     file_id: UUID | None,
     dry_run: bool,
+    requested_by: UUID | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Embed up to ``limit`` chunks for ``ds_id`` and return ``(payload, http_status)``.
 
@@ -261,7 +262,11 @@ def run_embed_pending_chunks(
         table="document_chunks", column="embedding_model_id"
     )
 
-    scan_job_id = scan_jobs_service.create_scan_job(ds_id=ds_id)
+    scan_job_id = scan_jobs_service.create_scan_job(
+        ds_id=ds_id,
+        job_type=scan_jobs_service.JOB_TYPE_EMBED_PENDING_CHUNKS,
+        requested_by=requested_by,
+    )
 
     target_count = len(rows)
     embedded_count = 0

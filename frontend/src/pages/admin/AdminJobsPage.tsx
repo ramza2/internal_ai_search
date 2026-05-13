@@ -16,17 +16,17 @@ import {
   SectionCard,
   Select,
 } from "@/components/ui";
-import type { BadgeVariant } from "@/components/ui";
 import { useDataSources } from "@/hooks/useDataSources";
 import type { AdminJob, AdminJobDetailResponse, AdminJobFailure, AdminJobFailuresResponse } from "@/types/adminJobs";
 import { formatDateTime, formatDuration } from "@/utils/format";
+import { getJobStatusBadgeVariant, getJobTypeLabel } from "@/utils/jobLabels";
 import docStyles from "./DocumentProcessModal.module.css";
 
 const STATUS_OPTIONS = ["", "RUNNING", "COMPLETED", "FAILED", "PENDING", "CANCELLED", "STOPPED", "PARTIAL"] as const;
 
-const JOB_TYPE_OPTIONS = [
-  "",
+const JOB_TYPE_FILTER_CODES = [
   "MANUAL_SCAN",
+  "WEBDAV_SYNC_ROOT",
   "WEBDAV_SYNC_TREE",
   "PROCESS_PENDING_TEXT",
   "PROCESS_PENDING_DOCUMENTS",
@@ -53,17 +53,6 @@ const emptyDraft = (): Draft => ({
   fromDate: "",
   toDate: "",
 });
-
-function jobStatusVariant(s: string): BadgeVariant {
-  const u = (s || "").toUpperCase();
-  if (u === "COMPLETED") return "success";
-  if (u === "FAILED") return "danger";
-  if (u === "RUNNING") return "warning";
-  if (u === "PENDING") return "primary";
-  if (u === "PARTIAL") return "warning";
-  if (u === "CANCELLED" || u === "STOPPED") return "neutral";
-  return "neutral";
-}
 
 function errSnippet(s: string | null | undefined, max = 80): string {
   if (!s) return "—";
@@ -219,9 +208,10 @@ export function AdminJobsPage() {
               onChange={(e) => setDraft((d) => ({ ...d, jobType: e.target.value }))}
               disabled={listBusy}
             >
-              {JOB_TYPE_OPTIONS.map((s) => (
-                <option key={s || "all"} value={s}>
-                  {s === "" ? "전체" : s}
+              <option value="">전체</option>
+              {JOB_TYPE_FILTER_CODES.map((code) => (
+                <option key={code} value={code}>
+                  {getJobTypeLabel(code)} ({code})
                 </option>
               ))}
             </Select>
@@ -304,7 +294,7 @@ export function AdminJobsPage() {
           <DataTable>
             <thead>
               <tr>
-                <th>job_type</th>
+                <th>작업 유형</th>
                 <th>status</th>
                 <th>소스</th>
                 <th>시작</th>
@@ -320,10 +310,13 @@ export function AdminJobsPage() {
               {items.map((j) => (
                 <tr key={j.id}>
                   <td>
-                    <span className="snippet">{j.job_type}</span>
+                    <div>{getJobTypeLabel(j.job_type)}</div>
+                    <div className="muted" style={{ fontSize: "0.75rem" }}>
+                      {j.job_type}
+                    </div>
                   </td>
                   <td>
-                    <Badge variant={jobStatusVariant(j.status)}>{j.status}</Badge>
+                    <Badge variant={getJobStatusBadgeVariant(j.status)}>{j.status}</Badge>
                   </td>
                   <td>{j.data_source_name ?? "—"}</td>
                   <td>{formatDateTime(j.started_at)}</td>
@@ -382,10 +375,27 @@ export function AdminJobsPage() {
                     </div>
                   )}
                   <div className="muted" style={{ fontSize: "0.85rem", marginBottom: "0.5rem" }}>
-                    <Badge variant={jobStatusVariant(detail.job.status)}>{detail.job.status}</Badge> · {detail.job.job_type}{" "}
+                    <Badge variant={getJobStatusBadgeVariant(detail.job.status)}>{detail.job.status}</Badge> ·{" "}
+                    {getJobTypeLabel(detail.job.job_type)}{" "}
+                    <span className="muted" style={{ fontSize: "0.8rem" }}>
+                      ({detail.job.job_type})
+                    </span>{" "}
                     · 실패 행 <strong>{detail.failures_count}</strong>건
                   </div>
                   <dl style={{ display: "grid", gridTemplateColumns: "10rem 1fr", gap: "0.35rem 0.75rem", fontSize: "0.875rem" }}>
+                    <dt className="muted">요청자</dt>
+                    <dd style={{ margin: 0 }}>
+                      {detail.job.requested_by_login_id || detail.job.requested_by_name ? (
+                        <>
+                          {detail.job.requested_by_name ?? "—"}{" "}
+                          <span className="muted">
+                            ({detail.job.requested_by_login_id ?? "—"})
+                          </span>
+                        </>
+                      ) : (
+                        "알 수 없음"
+                      )}
+                    </dd>
                     <dt className="muted">소스</dt>
                     <dd style={{ margin: 0 }}>{detail.job.data_source_name ?? "—"}</dd>
                     <dt className="muted">시작 / 종료</dt>

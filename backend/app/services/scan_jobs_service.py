@@ -1,8 +1,12 @@
-"""Best-effort persistence for ``scan_jobs`` (history of MANUAL_SCAN / future jobs).
+"""Best-effort persistence for ``scan_jobs`` (per-pipeline job history).
 
 Writes are tolerant of a missing ``scan_jobs`` table or absent enum types so
 the core sync flow can run even before the migration is applied. Failures here
 are swallowed deliberately and never block the calling request.
+
+Granular ``job_type`` values require migration ``021_scan_job_type_values.sql``
+on the database; otherwise ``create_scan_job`` may return ``None`` while the
+caller continues.
 """
 
 from __future__ import annotations
@@ -13,19 +17,47 @@ from psycopg.rows import dict_row
 
 from app.db.database import get_db_connection
 
+# Labels align with ``action_logs.action_type`` for the same operations.
+JOB_TYPE_MANUAL_SCAN = "MANUAL_SCAN"
+JOB_TYPE_WEBDAV_SYNC_ROOT = "WEBDAV_SYNC_ROOT"
+JOB_TYPE_WEBDAV_SYNC_TREE = "WEBDAV_SYNC_TREE"
+JOB_TYPE_PROCESS_PENDING_TEXT = "PROCESS_PENDING_TEXT"
+JOB_TYPE_PROCESS_PENDING_DOCUMENTS = "PROCESS_PENDING_DOCUMENTS"
+JOB_TYPE_CHUNK_COMPLETED_TEXT = "CHUNK_COMPLETED_TEXT"
+JOB_TYPE_EMBED_PENDING_CHUNKS = "EMBED_PENDING_CHUNKS"
 
-def create_scan_job(*, ds_id: UUID) -> UUID | None:
-    """Insert a RUNNING ``MANUAL_SCAN`` row. Returns the new id, or ``None``
-    when the ``scan_jobs`` table / enum types are not available yet."""
+_KNOWN_JOB_TYPES: frozenset[str] = frozenset(
+    {
+        JOB_TYPE_MANUAL_SCAN,
+        JOB_TYPE_WEBDAV_SYNC_ROOT,
+        JOB_TYPE_WEBDAV_SYNC_TREE,
+        JOB_TYPE_PROCESS_PENDING_TEXT,
+        JOB_TYPE_PROCESS_PENDING_DOCUMENTS,
+        JOB_TYPE_CHUNK_COMPLETED_TEXT,
+        JOB_TYPE_EMBED_PENDING_CHUNKS,
+    }
+)
+
+
+def create_scan_job(
+    *,
+    ds_id: UUID,
+    job_type: str = JOB_TYPE_MANUAL_SCAN,
+    requested_by: UUID | None = None,
+) -> UUID | None:
+    """Insert a RUNNING row. Returns the new id, or ``None`` on any DB/enum error."""
+    raw = (job_type or "").strip().upper() or JOB_TYPE_MANUAL_SCAN
+    if raw not in _KNOWN_JOB_TYPES:
+        raw = JOB_TYPE_MANUAL_SCAN
     stmt = """
         INSERT INTO scan_jobs (
             id, data_source_id, job_type, status, started_at,
             requested_by, total_files, created_at, updated_at
         ) VALUES (
             gen_random_uuid(), %s,
-            'MANUAL_SCAN'::scan_job_type,
+            %s::scan_job_type,
             'RUNNING'::scan_job_status,
-            NOW(), NULL, 0, NOW(), NOW()
+            NOW(), %s, 0, NOW(), NOW()
         )
         RETURNING id
     """
@@ -33,7 +65,7 @@ def create_scan_job(*, ds_id: UUID) -> UUID | None:
         with get_db_connection() as conn:
             conn.row_factory = dict_row
             with conn.cursor() as cur:
-                cur.execute(stmt, (ds_id,))
+                cur.execute(stmt, (ds_id, raw, requested_by))
                 row = cur.fetchone()
             conn.commit()
         return row["id"] if row else None
@@ -122,3 +154,17 @@ def fail_scan_job(*, job_id: UUID | None, error_message: str) -> None:
             conn.commit()
     except Exception:
         pass
+
+
+__all__ = [
+    "JOB_TYPE_CHUNK_COMPLETED_TEXT",
+    "JOB_TYPE_EMBED_PENDING_CHUNKS",
+    "JOB_TYPE_MANUAL_SCAN",
+    "JOB_TYPE_PROCESS_PENDING_DOCUMENTS",
+    "JOB_TYPE_PROCESS_PENDING_TEXT",
+    "JOB_TYPE_WEBDAV_SYNC_ROOT",
+    "JOB_TYPE_WEBDAV_SYNC_TREE",
+    "complete_scan_job",
+    "create_scan_job",
+    "fail_scan_job",
+]

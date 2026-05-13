@@ -134,6 +134,7 @@ def run_chunk_completed_text(
     reprocess: bool,
     dry_run: bool,
     include_extensions: frozenset[str] | None,
+    requested_by: UUID | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Drive one synchronous batch of COMPLETED-text chunking.
 
@@ -171,7 +172,11 @@ def run_chunk_completed_text(
             reprocess=reprocess,
         ), 200
 
-    scan_job_id = scan_jobs_service.create_scan_job(ds_id=ds_id)
+    scan_job_id = scan_jobs_service.create_scan_job(
+        ds_id=ds_id,
+        job_type=scan_jobs_service.JOB_TYPE_CHUNK_COMPLETED_TEXT,
+        requested_by=requested_by,
+    )
 
     items: list[dict[str, Any]] = []
     chunked_files_count = 0

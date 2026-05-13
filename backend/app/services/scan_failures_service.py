@@ -25,7 +25,7 @@ Document processing (``process-pending-documents``) additionally records:
 
 Chunking (``chunk-completed-text``) may record:
 
-- ``CHUNK_SAVE_FAILED`` — DB/chunk insert failures (persisted when the DB allows this ``error_code`` value; if ``scan_failures.error_code`` is a PostgreSQL enum that does not yet list ``CHUNK_SAVE_FAILED``, the insert is skipped safely — add the enum label via migration).
+- ``CHUNK_SAVE_FAILED`` — DB/chunk insert failures (persisted when the DB allows this ``error_code`` value; if ``scan_failures.error_code`` is enum ``scan_failure_error_code`` without the label, run ``db/migrations/021_scan_job_type_values.sql`` or add the value manually — otherwise the insert is skipped safely).
 """
 
 from __future__ import annotations

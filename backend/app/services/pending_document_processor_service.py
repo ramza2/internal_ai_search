@@ -538,6 +538,7 @@ def run_process_pending_documents(
     include_extensions: frozenset[str] | None,
     dry_run: bool,
     reprocess_skipped: bool,
+    requested_by: UUID | None = None,
 ) -> tuple[dict[str, Any], int]:
     row = datasource_svc.fetch_data_source_row_internal(ds_id=ds_id)
     source_type_str = str(row["source_type"]).strip().upper()
@@ -645,7 +646,11 @@ def run_process_pending_documents(
             200,
         )
 
-    scan_job_id = scan_jobs_service.create_scan_job(ds_id=ds_id)
+    scan_job_id = scan_jobs_service.create_scan_job(
+        ds_id=ds_id,
+        job_type=scan_jobs_service.JOB_TYPE_PROCESS_PENDING_DOCUMENTS,
+        requested_by=requested_by,
+    )
 
     items: list[dict[str, Any]] = []
     completed_count = 0

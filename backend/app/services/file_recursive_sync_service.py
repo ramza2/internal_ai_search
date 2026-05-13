@@ -191,6 +191,7 @@ def run_webdav_recursive_sync(
     include_hidden: bool,
     apply_exclusions: bool,
     detect_deleted: bool = False,
+    requested_by: UUID | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Run a bounded recursive BFS sync; return ``(payload, http_status_code)``.
 
@@ -210,7 +211,11 @@ def run_webdav_recursive_sync(
         "name": row["name"],
         "source_type": source_type_str,
     }
-    scan_job_id = scan_jobs_service.create_scan_job(ds_id=ds_id)
+    scan_job_id = scan_jobs_service.create_scan_job(
+        ds_id=ds_id,
+        job_type=scan_jobs_service.JOB_TYPE_WEBDAV_SYNC_TREE,
+        requested_by=requested_by,
+    )
 
     md = _clamp(int(max_depth), 0, MAX_DEPTH_CEILING)
     mi = _clamp(int(max_items), 1, MAX_ITEMS_CEILING)

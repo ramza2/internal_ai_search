@@ -69,6 +69,7 @@ def run_webdav_root_sync(
     *,
     limit: int,
     include_hidden: bool,
+    requested_by: UUID | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Fetch root items via PROPFIND Depth:1 and upsert them into ``files``.
 
@@ -84,7 +85,11 @@ def run_webdav_root_sync(
         "source_type": source_type_str,
     }
 
-    scan_job_id = scan_jobs_service.create_scan_job(ds_id=ds_id)
+    scan_job_id = scan_jobs_service.create_scan_job(
+        ds_id=ds_id,
+        job_type=scan_jobs_service.JOB_TYPE_WEBDAV_SYNC_ROOT,
+        requested_by=requested_by,
+    )
 
     # Short-circuit LOCAL_FOLDER with the sync-specific message, before
     # invoking the listing path (which would still report correctly, but

@@ -17,6 +17,7 @@ import {
 } from "@/components/ui";
 import type { DashboardSummaryResponse } from "@/types/adminDashboard";
 import { formatDateTime, formatInt } from "@/utils/format";
+import { getJobStatusBadgeVariant, getJobTypeLabel } from "@/utils/jobLabels";
 import styles from "./AdminDashboardPage.module.css";
 
 const quickLinks = [
@@ -31,23 +32,6 @@ const quickLinks = [
   { to: "/admin/users", title: "사용자 관리", desc: "승인·잠금·역할" },
   { to: "/admin/action-logs", title: "작업 로그", desc: "감사 로그 조회" },
 ];
-
-function scanJobStatusVariant(s: string): BadgeVariant {
-  switch (s) {
-    case "COMPLETED":
-      return "success";
-    case "RUNNING":
-      return "primary";
-    case "FAILED":
-      return "danger";
-    case "PENDING":
-      return "warning";
-    case "STOPPED":
-      return "neutral";
-    default:
-      return "neutral";
-  }
-}
 
 function actionResultVariant(r: string): BadgeVariant {
   if (r === "SUCCESS") return "success";
@@ -233,10 +217,13 @@ export function AdminDashboardPage() {
                     <tr key={j.id}>
                       <td>{j.data_source_name ?? "—"}</td>
                       <td>
-                        <Badge variant="neutral">{j.job_type}</Badge>
+                        <div>{getJobTypeLabel(j.job_type)}</div>
+                        <div className="muted" style={{ fontSize: "0.75rem" }}>
+                          {j.job_type}
+                        </div>
                       </td>
                       <td>
-                        <Badge variant={scanJobStatusVariant(j.status)}>{j.status}</Badge>
+                        <Badge variant={getJobStatusBadgeVariant(j.status)}>{j.status}</Badge>
                       </td>
                       <td>
                         {formatInt(j.processed_files)} / {formatInt(j.total_files)}

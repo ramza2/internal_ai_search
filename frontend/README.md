@@ -35,6 +35,7 @@ Vite + React + TypeScript 기반 웹 UI. 백엔드(FastAPI)와 JWT 인증으로 
 ## 관리자 대시보드 (`/admin`)
 
 - **`GET /api/admin/dashboard/summary`** 한 번으로 사용자·데이터 소스·파일(`analysis_status`별)·chunk/embedding·최근 24시간 활동(`SEARCH` / `RAG_QUESTION` / `LOGIN` / 실패 건수)·최근 스캔 작업 5건·최근 감사 로그 10건(본문 `detail` 없음)·문제 지표 카드용 카운트를 받습니다.
+- **최근 스캔 작업** 테이블의 `job_type`은 `getJobTypeLabel` / `getJobStatusBadgeVariant`(`src/utils/jobLabels.ts`)로 작업 목록과 동일한 한글·배지 규칙을 씁니다.
 - 화면: `PageHeader`(설명 + **새로고침**), `SectionCard` + `StatCard` 그리드, 문제 항목별 **관리 페이지 링크**, `DataTable` 두 개(스캔 작업 / 최근 활동), 하단 **바로 가기** 카드. **차트 라이브러리는 사용하지 않음**(카드·테이블만).
 - 최초 `Loading`, API 실패 시 `ErrorMessage` + 다시 시도, 스캔/활동 테이블은 빈 배열이면 `EmptyState`. 새로고침 중 버튼 비활성화.
 
@@ -82,11 +83,14 @@ npm run preview
 ## 작업 목록 (`/admin/jobs`)
 
 - **API:** `src/api/adminJobsApi.ts` — `GET /api/admin/jobs`, `GET /api/admin/jobs/{id}`, `GET /api/admin/jobs/{id}/failures` (`src/types/adminJobs.ts`).
+- **job_type 표시:** `src/utils/jobLabels.ts`의 `getJobTypeLabel`로 한글 라벨(예: `MANUAL_SCAN` → 수동 작업, `WEBDAV_SYNC_TREE` → 재귀 동기화). 백엔드에만 있는 코드는 그대로 표시합니다. 상태 배지는 `getJobStatusBadgeVariant`로 대시보드와 공유합니다.
+- **요청자:** 상세 모달에서 `requested_by_name` / `requested_by_login_id`를 표시합니다. 값이 없으면 **알 수 없음**(과거 `MANUAL_SCAN` 행 등).
 - **필터:** `status`, `job_type`, `data_source_id`, `keyword`(소스 이름·`current_file_path`·`error_message` ILIKE), `from_date` / `to_date`, `limit`(20/50/100), `offset`. **조회** 시 적용·offset 리셋, **초기화**로 필터 초기화.
-- **목록:** job_type·상태 배지·소스명·시작/종료·`formatDuration` 소요 시간·진행률(퍼센트 + processed/total)·완료/실패/스킵/삭제 카운트·오류 요약·**상세** 버튼.
+- **목록:** 작업 유형(한글 + 코드)·상태 배지·소스명·시작/종료·`formatDuration` 소요 시간·진행률(퍼센트 + processed/total)·완료/실패/스킵/삭제 카운트·오류 요약·**상세** 버튼.
 - **상세:** 모달에서 job 메타·카운터·`error_message` 및 **실패 목록** 테이블(`scan_failures`). 실패가 없으면 `EmptyState`.
 - **경고:** `scan_jobs` / `scan_failures` 테이블이 없는 개발 DB에서는 API가 빈 목록과 `warnings`를 주며 UI에 안내합니다.
 - **조회 전용:** 취소·재시도·백그라운드 실행은 worker 도입 후 예정입니다. `action_logs`에 이 화면의 조회를 남기지 않습니다(백엔드 README와 동일 정책).
+- **과거 데이터:** DB에 남아 있는 오래된 행은 `job_type`이 `MANUAL_SCAN`일 수 있습니다(백엔드가 일괄 백필하지 않음). 실제 실행 단계는 `action_logs`와 시간대를 맞춰 추정해야 합니다.
 
 ## 작업 로그 (`/admin/action-logs`)
 

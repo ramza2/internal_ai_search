@@ -120,7 +120,8 @@ backend/
 ├─ db/
 │  └─ migrations/
 │     ├─ 019_app_users.sql
-│     └─ 020_action_logs.sql
+│     ├─ 020_action_logs.sql
+│     └─ 021_scan_job_type_values.sql
 ├─ requirements.txt
 ├─ .env   (local only; gitignored — create next to this README)
 └─ README.md
@@ -431,7 +432,7 @@ Persists **direct children only** under the configured `webdav_root_path` into t
   - Files (new rows) → **`PENDING`**.
   - Files (existing rows) → reset to **`PENDING`** only if **`etag`** or **`last_modified`** changed; otherwise the current status is preserved (e.g. `COMPLETED` stays `COMPLETED`).
 - **Transactions:** the **entire upsert batch + the `data_sources` finalization** runs inside one transaction. Any failure rolls back the whole batch (no partial successes); `scan_jobs` is recorded as **`FAILED`** in that case.
-- **`scan_jobs` (best-effort):** a `MANUAL_SCAN` row is inserted as **`RUNNING`** before the WebDAV fetch and finalized to **`COMPLETED`** / **`FAILED`** afterwards. `requested_by` is `NULL` (auth comes later). If the `scan_jobs` table or its enum types are not present yet, the column is silently skipped and the response shows `"scan_job_id": null`.
+- **`scan_jobs` (best-effort):** opens `job_type='WEBDAV_SYNC_ROOT'`, `status='RUNNING'`, `requested_by` = calling admin's `app_users.id`. Finalized to **`COMPLETED`** / **`FAILED`** afterwards. If the `scan_jobs` table is missing, the enum `scan_job_type` lacks the new label (migration `021` not applied), or the insert fails for any reason, `create_scan_job` returns `NULL` and the response shows `"scan_job_id": null` while the sync still completes.
 - **`data_sources` on success:** **`last_scan_at`**, **`last_connection_test_at`**, **`last_connection_success = TRUE`**, **`last_connection_message = "WebDAV root sync succeeded"`** (or **`"...succeeded with truncated result"`**), and **`updated_at`** are all set in the same transaction.
 - **`data_sources` on failure:** `last_scan_at` is **not** touched; `last_connection_*` and `updated_at` reflect the failure summary.
 - **Query parameters**
@@ -501,7 +502,7 @@ Bounded **BFS** over **`PROPFIND`** with **`Depth: 1`** per folder. Walks the tr
 - **`data_sources` finalization**
   - Success / partial → `last_scan_at`, `last_connection_test_at`, `last_connection_success = TRUE`, `last_connection_message = "WebDAV recursive sync succeeded"` / `"...stopped by max_items limit"` / `"...completed with some failed directories"`.
   - Fatal failure on the *start folder* (auth, 404, connection error, …) → `last_connection_*` only; **`last_scan_at` is not bumped**.
-- **`scan_jobs`** (best-effort): `MANUAL_SCAN` row created as `RUNNING`; finalized with `total_files = total_remote_items`, `processed_files = inserted + updated`, `completed_files = processed_files`, `failed_files = failed_count`, `skipped_files = excluded + directories`. Partial successes still finalize as **`COMPLETED`** but carry a short `error_message` summary of failed folders.
+- **`scan_jobs`** (best-effort): `job_type='WEBDAV_SYNC_TREE'`, `requested_by` = admin user id, `RUNNING` → counters on finalize. `total_files = total_remote_items`, `processed_files = inserted + updated`, `completed_files = processed_files`, `failed_files = failed_count`, `skipped_files = excluded + directories`. Partial successes still finalize as **`COMPLETED`** but carry a short `error_message` summary of failed folders.
 - **Response shape** — counters include `visited_directories`, `total_remote_items`, `processed_items`, `inserted_count`, `updated_count`, `directories_count`, `files_count`, `excluded_count`, `failed_count`, `truncated`. Partial runs add `failed_paths[]` (capped at 20). `warnings[]` is also capped at 20.
 - **Out of scope (Step 10):** file downloads, content hashing / `content_hash`, mime sniffing beyond the server-provided `getcontenttype`, chunking, embeddings, and `document_chunks` writes. Deletion detection is added in **Step 11** below as an opt-in extension of this endpoint.
 - **Operational note:** this endpoint runs synchronously inside the HTTP request, with `max_depth` / `max_items` for safety. The current shape is **intentionally minimal**; in production the recursive walk is expected to move to a worker queue (separate process) so that long traversals do not hold an HTTP connection.
@@ -581,7 +582,7 @@ Pulls `analysis_status='PENDING'` rows for a single data source, **downloads** e
   - **COMPLETED** — `analysis_status='COMPLETED'`, `analysis_error_code=NULL`, `analysis_error_message=NULL`, `content_hash=<sha256>`, `updated_at=NOW()`, `last_indexed_at` left as-is.
   - **SKIPPED** — `analysis_status='SKIPPED'`, error code one of `UNSUPPORTED_EXTENSION` / `FILE_TOO_LARGE` / `BINARY_CONTENT_DETECTED`, with a short matching `analysis_error_message`.
   - **FAILED** — `analysis_status='FAILED'`, error code one of `DOWNLOAD_FAILED` / `DECODING_FAILED`, with a non-secret HTTP-status-style `analysis_error_message`.
-- **`scan_jobs`** (best-effort, same shape as Steps 8/10/11): `MANUAL_SCAN` row created as `RUNNING`; on success finalized with `total_files = target_count`, `processed_files = completed+skipped+failed`, `completed_files`, `skipped_files`, `failed_files`, `deleted_files = 0`. On WebDAV auth short-circuit the row goes to `FAILED` with `error_message='WebDAV authentication failed'`.
+- **`scan_jobs`** (best-effort): `job_type='PROCESS_PENDING_TEXT'`, `requested_by` = admin, `RUNNING`; on success finalized with `total_files = target_count`, `processed_files = completed+skipped+failed`, `completed_files`, `skipped_files`, `failed_files`, `deleted_files = 0`. On WebDAV auth short-circuit the row goes to `FAILED` with `error_message='WebDAV authentication failed'`.
 - **`scan_failures`** (best-effort, table presumed `id / scan_job_id / data_source_id / file_id / remote_path / error_code / error_message / created_at`): every `DOWNLOAD_FAILED` / `DECODING_FAILED` / `FILE_TOO_LARGE` / `BINARY_CONTENT_DETECTED` is appended. Missing table / mismatched columns are tolerated silently. `UNSUPPORTED_EXTENSION` is intentionally omitted (would create unbounded noise).
 - **Security**
   - `credential_secret` plaintext, `credential_secret_enc` ciphertext, and `Authorization` headers are **never** placed in responses, logs, `analysis_error_message`, `scan_jobs.error_message`, or `scan_failures.error_message`.
@@ -631,7 +632,7 @@ curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-docume
 - **Target query** — `data_source_id = {id}`, `is_directory = FALSE`, `remote_path IS NOT NULL`, `analysis_status <> 'DELETED'`, extension in the supported set (optionally narrowed by `include_extensions`), and either `analysis_status = 'PENDING'` or (`reprocess_skipped=true` AND `analysis_status='SKIPPED'` AND `analysis_error_code='UNSUPPORTED_EXTENSION'`).
 - **Query parameters:** `limit` (default **50**, **1–500**), `max_file_size_bytes` (default **52_428_800** = 50 MB), optional `include_extensions`, `dry_run`, `reprocess_skipped`.
 - **Per-file outcomes:** success → `COMPLETED` + `file_contents` upsert + SHA-256 `content_hash` on `files`; password-protected → `FAILED` / `PASSWORD_PROTECTED`; parse errors → `FAILED` / `PARSING_FAILED`; empty extractable text (e.g. image-only PDF) → `SKIPPED` / `NO_EXTRACTABLE_TEXT`; over size cap → `SKIPPED` / `FILE_TOO_LARGE`; unsupported extension (defensive) → `SKIPPED` / `UNSUPPORTED_EXTENSION` with message `Unsupported document extension`.
-- **`scan_jobs` / `scan_failures`:** same best-effort pattern as Step 12; failures may record `PARSING_FAILED`, `PASSWORD_PROTECTED`, `FILE_TOO_LARGE`, `NO_EXTRACTABLE_TEXT` (not `UNSUPPORTED_EXTENSION`).
+- **`scan_jobs` / `scan_failures`:** same best-effort pattern as Step 12; `job_type='PROCESS_PENDING_DOCUMENTS'` with `requested_by` = admin. Failures may record `PARSING_FAILED`, `PASSWORD_PROTECTED`, `FILE_TOO_LARGE`, `NO_EXTRACTABLE_TEXT` (not `UNSUPPORTED_EXTENSION`).
 
 #### `document_chunks` lifecycle (Steps 13 + 14)
 
@@ -679,7 +680,7 @@ Walks files whose `analysis_status='COMPLETED'` and that already carry a populat
   - **`reprocess=true`** ⇒ for each file the per-file transaction runs `DELETE FROM document_chunks WHERE file_id = %s` first, then `INSERT` (via `executemany`) for the new chunks. The DELETE + INSERT commit together; a failure rolls back both halves and the file is marked `FAILED / CHUNK_SAVE_FAILED` in `items`.
   - **`file_id + chunk_index` UNIQUE** — assumed enforced by the schema. With `reprocess=true` the prior rows are gone before the new INSERT, so the unique constraint is never violated. With `reprocess=false` the candidate query already excludes files that have any chunks, so the unique constraint is also never violated.
 - **Per-file transactions** — one DB connection is held for the whole batch but each file's `DELETE + INSERT` (or just `INSERT`) commits as a stand-alone transaction. A bad file fails on its own and does **not** flip `files.analysis_status` away from `COMPLETED` (the extraction stage succeeded — chunking is downstream of that decision). Failures are appended to `scan_failures` with `error_code='CHUNK_SAVE_FAILED'` (best-effort).
-- **`scan_jobs`** (best-effort): `MANUAL_SCAN` row created as `RUNNING`; finalized on success with `total_files = target_count`, `processed_files = chunked_files_count + skipped_count + failed_count`, `completed_files = chunked_files_count`, `failed_files`, `skipped_files`, `deleted_files = 0`. A batch-level exception sets `FAILED` with `error_message='Chunk-completed-text batch failed'`.
+- **`scan_jobs`** (best-effort): `job_type='CHUNK_COMPLETED_TEXT'`, `requested_by` = admin, `RUNNING`; finalized on success with `total_files = target_count`, `processed_files = chunked_files_count + skipped_count + failed_count`, `completed_files = chunked_files_count`, `failed_files`, `skipped_files`, `deleted_files = 0`. A batch-level exception sets `FAILED` with `error_message='Chunk-completed-text batch failed'`.
 - **Per-item statuses** (response `items[]`)
   - **`CHUNKED`** — new chunks inserted (`reprocess=false`, or `reprocess=true` against a file that had none).
   - **`REPROCESSED`** — `reprocess=true` and prior chunks were deleted before the new insert.
@@ -718,7 +719,7 @@ Pulls `document_chunks` rows whose `embedding IS NULL` (or every COMPLETED chunk
   - `document_chunks.chunk_text IS NOT NULL` and `<> ''`.
   - When `reembed=false`, additionally `document_chunks.embedding IS NULL`.
   - Order: `files.remote_path ASC, document_chunks.chunk_index ASC`. `LIMIT = limit`.
-- **`scan_jobs` integration** — opens a `job_type='MANUAL_SCAN', status='RUNNING'` row and closes it as `COMPLETED` (or `FAILED` on a fatal Ollama / DB error). On success, `total_files = target_chunks_count`, `processed_files = processed_chunks_count`, `completed_files = embedded_chunks_count`, `failed_files = failed_chunks_count`, `skipped_files = 0`, `deleted_files = 0`. **The `*_files` columns count *chunks*, not files**, because the embedding pass operates at chunk granularity. `dry_run=true` does **not** open a `scan_job`.
+- **`scan_jobs` integration** — opens `job_type='EMBED_PENDING_CHUNKS'`, `requested_by` = admin, `status='RUNNING'` and closes as `COMPLETED` (or `FAILED` on a fatal Ollama / DB error). On success, `total_files = target_chunks_count`, `processed_files = processed_chunks_count`, `completed_files = embedded_chunks_count`, `failed_files = failed_chunks_count`, `skipped_files = 0`, `deleted_files = 0`. **The `*_files` columns count *chunks*, not files**, because the embedding pass operates at chunk granularity. `dry_run=true` does **not** open a `scan_job`.
 - **`embedding_models` bookkeeping** — best-effort: when the table exists the active `(provider, model_name, dimension)` row is upserted and flagged `is_active = true`. When `document_chunks` exposes an `embedding_model_id` column, every UPDATE writes the resolved id alongside the vector. Both checks are wrapped in defensive try/except so deployments without that schema still embed normally.
 - **`files.last_indexed_at` update condition**
   - Bumped to `NOW()` **only** after the current batch commits *and* a file now has zero `document_chunks.embedding IS NULL` rows.
@@ -1058,6 +1059,10 @@ curl "http://localhost:8000/api/files/{file_id}/chunks/{chunk_id}/preview?contex
 
 **Audit schema (Step 20):** `action_logs` + enum `action_result` (`SUCCESS`, `FAIL`). Apply `db/migrations/020_action_logs.sql` once. Inserts are **best-effort** — if the table is missing or a write fails, the API response is **unchanged**.
 
+**`scan_jobs` / `scan_failures` enums (optional, after your baseline `scan_jobs` DDL):** Apply `db/migrations/021_scan_job_type_values.sql` when the database defines PostgreSQL enum `scan_job_type` (and optionally `scan_failure_error_code` for `scan_failures.error_code`). It adds `WEBDAV_SYNC_ROOT`, `WEBDAV_SYNC_TREE`, `PROCESS_PENDING_TEXT`, `PROCESS_PENDING_DOCUMENTS`, `CHUNK_COMPLETED_TEXT`, `EMBED_PENDING_CHUNKS` while keeping **`MANUAL_SCAN`**, and adds **`CHUNK_SAVE_FAILED`** to `scan_failure_error_code` **only if** that type exists (plain `VARCHAR` error columns → no-op). **No backfill** of historical rows: older jobs may still show `MANUAL_SCAN`; reconciling them with `action_logs` without a time correlation is intentionally out of scope. Until this migration runs, `create_scan_job` may return `NULL` for new enum labels while the HTTP pipeline still succeeds.
+
+**Worker / queue (not in this repo step):** There is still **no** background worker, **`PENDING` job queue state**, heartbeat, cancel API, or `202 Accepted` job polling — all pipeline endpoints remain **synchronous**; `scan_jobs` is observability only.
+
 **Initial admin:** On application startup, if **no** row with `role = ADMIN` exists, the server inserts one admin from `INITIAL_ADMIN_*` env vars (`must_change_password=true`, `status=ACTIVE`). If `INITIAL_ADMIN_PASSWORD` is empty, bootstrap is skipped (warning log). Failures are **non-fatal** — the API still starts (e.g. missing table in early dev).
 
 **Signup:** `POST /api/auth/signup` creates `USER` + `PENDING`; duplicate `login_id` → **409**. PENDING users **cannot** log in (**403**). Logged as `SIGNUP` (no password in `detail`).
@@ -1076,13 +1081,13 @@ curl "http://localhost:8000/api/files/{file_id}/chunks/{chunk_id}/preview?contex
 
 **Admin job list (read-only, pre-worker):** Same **ACTIVE ADMIN** gate. These routes surface **`scan_jobs`** and **`scan_failures`** already written by sync/pipeline code; they do **not** enqueue work, cancel jobs, or change schema.
 
-- `GET /api/admin/jobs` — Query: `data_source_id`, `status`, `job_type`, `keyword` (ILIKE on `data_sources.name`, `sj.current_file_path`, `sj.error_message`), `from_date`, `to_date` (on `sj.created_at`), `limit` (default **50**, max 200), `offset`. Response: `total`, `items` (each with `data_source_name`, `duration_ms`, `progress_percent`, optional `requested_by` from `app_users.login_id` when `requested_by_user_id` is set), optional `warnings` when `scan_jobs` is missing (empty list, `total: 0`, `message`).
+- `GET /api/admin/jobs` — Query: `data_source_id`, `status`, `job_type`, `keyword` (ILIKE on `data_sources.name`, `sj.current_file_path`, `sj.error_message`), `from_date`, `to_date` (on `sj.created_at`), `limit` (default **50**, max 200), `offset`. Response: `total`, `items` (each with `data_source_name`, `duration_ms`, `progress_percent`, `requested_by` UUID plus `requested_by_login_id` / `requested_by_name` via `LEFT JOIN app_users` when `sj.requested_by` is set), optional `warnings` when `scan_jobs` is missing (empty list, `total: 0`, `message`).
 - `GET /api/admin/jobs/{job_id}` — Single job + `failures_count`. **404** when not found. **503** when `scan_jobs` table is unavailable. `duration_ms`: `(finished_at - started_at)` when both set; if `status = RUNNING` and `finished_at` is null, `NOW() - started_at`; else null. `progress_percent`: `processed_files / total_files * 100` when `total_files > 0`, else null.
 - `GET /api/admin/jobs/{job_id}/failures` — Paginated failures (`limit` default **100**, max 500). Optional `warnings` when `scan_failures` is missing. Each row's `error_message` is passed through the same **`sanitize_error_message`** helper used for audit logs (patterns suggesting secrets/tokens are redacted).
 
 **`action_logs`:** These three **GET** list/detail/failure routes are **not** appended to `action_logs` — they are frequent operational reads (same rationale as dashboard summary / search data-sources listing).
 
-**`CHUNK_SAVE_FAILED`:** `scan_failures_service` accepts this code so `record_scan_failure(..., error_code='CHUNK_SAVE_FAILED')` can persist when `error_code` is stored as **varchar**. If your DB uses a **PostgreSQL enum** for `scan_failures.error_code` that does not yet include `CHUNK_SAVE_FAILED`, inserts may fail and are caught (no crash); add the enum value via a **future migration** (not in this step).
+**`CHUNK_SAVE_FAILED`:** `scan_failures_service` accepts this code. When `error_code` is **`VARCHAR`**, no DB change is required. When it is enum **`scan_failure_error_code`**, apply migration **`021_scan_job_type_values.sql`** (or add the label manually); otherwise inserts are caught and skipped (no crash).
 
 **Admin audit viewer:** `GET /api/admin/action-logs` — same admin gate. Query: `user_id`, `action_type`, `result` (`SUCCESS`|`FAIL`), `data_source_id`, `target_file_id`, `keyword` (ILIKE on `search_query`, `target_file_path`, `detail::text`), `from_date`, `to_date` (ISO datetime or `YYYY-MM-DD`), `limit` (default 50, max 200), `offset`. Each successful listing appends an `ACTION_LOG_VIEW` row with **compact** `detail.filters` (no raw keyword text). Listing failures return **500**.
 

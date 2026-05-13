@@ -305,6 +305,7 @@ def sync_data_source_webdav_root(
             data_source_id,
             limit=limit,
             include_hidden=include_hidden,
+            requested_by=admin.id,
         )
         body = payload if isinstance(payload, dict) else None
         _log_op(
@@ -376,6 +377,7 @@ def sync_data_source_webdav_tree(
             include_hidden=include_hidden,
             apply_exclusions=apply_exclusions,
             detect_deleted=detect_deleted,
+            requested_by=admin.id,
         )
         body = payload if isinstance(payload, dict) else None
         _log_op(
@@ -448,6 +450,7 @@ def process_data_source_pending_text(
             max_file_size_bytes=max_file_size_bytes,
             include_extensions=ext_set,
             dry_run=dry_run,
+            requested_by=admin.id,
         )
         body = payload if isinstance(payload, dict) else None
         _log_op(
@@ -511,6 +514,7 @@ def process_data_source_pending_documents(
             include_extensions=ext_set,
             dry_run=dry_run,
             reprocess_skipped=reprocess_skipped,
+            requested_by=admin.id,
         )
         body = payload if isinstance(payload, dict) else None
         doc_detail: dict[str, Any] = {
@@ -598,6 +602,7 @@ def chunk_data_source_completed_text(
             reprocess=reprocess,
             dry_run=dry_run,
             include_extensions=ext_set,
+            requested_by=admin.id,
         )
         body = payload if isinstance(payload, dict) else None
         _log_op(
@@ -696,6 +701,7 @@ def embed_data_source_pending_chunks(
             reembed=reembed,
             file_id=file_id,
             dry_run=dry_run,
+            requested_by=admin.id,
         )
         body = payload if isinstance(payload, dict) else None
         _log_op(
