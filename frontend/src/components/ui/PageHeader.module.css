@@ -1,0 +1,19 @@
+.wrap {
+  margin-bottom: 1.25rem;
+}
+
+.title {
+  margin: 0 0 0.35rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+}
+
+.desc {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--color-text-muted);
+  max-width: 52rem;
+  line-height: 1.55;
+}

@@ -1,0 +1,48 @@
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.sectionTitle {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+  color: var(--color-text);
+}
+
+.linkGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.quickLink {
+  text-decoration: none;
+  color: inherit;
+}
+
+.quickCard {
+  height: 100%;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.quickLink:hover .quickCard {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.quickTitle {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-primary-dark);
+}
+
+.quickDesc {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}

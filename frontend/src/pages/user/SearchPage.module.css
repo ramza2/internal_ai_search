@@ -1,0 +1,111 @@
+.searchRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: stretch;
+  margin-bottom: 0.5rem;
+}
+
+.searchInput {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.modeSelect {
+  flex: 0 0 11rem;
+  min-width: 0;
+}
+
+.metaLine {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+}
+
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.resultCard {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  border: 1px solid var(--color-border);
+  padding: 0.85rem 1rem;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem 0.85rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .resultCard {
+    grid-template-columns: 1fr;
+  }
+}
+
+.resultMain {
+  min-width: 0;
+}
+
+.resultHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+}
+
+.fileLink {
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--color-primary);
+}
+
+.fileLink:hover {
+  text-decoration: underline;
+}
+
+.path {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.snippet {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--color-text);
+}
+
+.scoreLine {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  font-family: ui-monospace, monospace;
+  line-height: 1.4;
+}
+
+.reasons {
+  margin: 0.25rem 0 0;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+.resultActions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-items: stretch;
+}
