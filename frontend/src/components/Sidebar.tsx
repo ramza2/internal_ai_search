@@ -67,6 +67,14 @@ function IconFileText({ className }: { className?: string }) {
   );
 }
 
+function IconJobs({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+    </svg>
+  );
+}
+
 export function Sidebar() {
   const isAdmin = useAuthStore((s) => s.isAdmin);
 
@@ -103,6 +111,10 @@ export function Sidebar() {
             >
               <IconChart className={styles.icon} />
               파일 현황 분석
+            </NavLink>
+            <NavLink to="/admin/jobs" className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ""}`}>
+              <IconJobs className={styles.icon} />
+              작업 목록
             </NavLink>
             <NavLink to="/admin/users" className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ""}`}>
               <IconUsers className={styles.icon} />

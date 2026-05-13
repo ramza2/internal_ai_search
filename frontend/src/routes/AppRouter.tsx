@@ -18,6 +18,7 @@ import { LoginPage } from "@/pages/auth/LoginPage";
 import { SignupPage } from "@/pages/auth/SignupPage";
 import { ActionLogsPage } from "@/pages/admin/ActionLogsPage";
 import { AdminDashboardPage } from "@/pages/admin/AdminDashboardPage";
+import { AdminJobsPage } from "@/pages/admin/AdminJobsPage";
 import { DataSourcesPage } from "@/pages/admin/DataSourcesPage";
 import { FileStatsPage } from "@/pages/admin/FileStatsPage";
 import { UsersPage } from "@/pages/admin/UsersPage";
@@ -90,6 +91,7 @@ export function AppRouter() {
               <Route element={<AdminRoute />}>
                 <Route path="/admin" element={<AdminDashboardPage />} />
                 <Route path="/admin/data-sources" element={<DataSourcesPage />} />
+                <Route path="/admin/jobs" element={<AdminJobsPage />} />
                 <Route path="/admin/file-stats" element={<FileStatsPage />} />
                 <Route path="/admin/users" element={<UsersPage />} />
                 <Route path="/admin/action-logs" element={<ActionLogsPage />} />

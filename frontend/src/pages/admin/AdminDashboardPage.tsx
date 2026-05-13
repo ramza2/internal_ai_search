@@ -26,6 +26,7 @@ const quickLinks = [
     title: "문서 파일 처리",
     desc: "PDF/DOCX/XLSX/PPTX/HWPX 문서를 검색 대상으로 변환합니다. 데이터 소스별로 실행합니다.",
   },
+  { to: "/admin/jobs", title: "작업 목록", desc: "수집/분석/임베딩 작업 이력과 실패 내역을 확인합니다." },
   { to: "/admin/file-stats", title: "파일 현황 분석", desc: "상태·유형·확장자·대용량 파일" },
   { to: "/admin/users", title: "사용자 관리", desc: "승인·잠금·역할" },
   { to: "/admin/action-logs", title: "작업 로그", desc: "감사 로그 조회" },

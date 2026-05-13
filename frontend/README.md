@@ -21,7 +21,7 @@ Vite + React + TypeScript 기반 웹 UI. 백엔드(FastAPI)와 JWT 인증으로 
 | 공개 | `/login`, `/signup` | 로그인·회원가입 |
 | 인증 후 | `/change-password` | 비밀번호 변경(강제 시 안내) |
 | 사용자 | `/search`, `/answer`, `/files/:fileId/preview` | 통합 검색, AI 질문, 미리보기 |
-| 관리자 | `/admin`, `/admin/data-sources`, `/admin/file-stats`, `/admin/users`, `/admin/action-logs` | 대시보드(요약 API), 데이터 소스, 파일 통계, 사용자, 작업 로그 |
+| 관리자 | `/admin`, `/admin/data-sources`, `/admin/jobs`, `/admin/file-stats`, `/admin/users`, `/admin/action-logs` | 대시보드, 데이터 소스, **작업 목록(scan_jobs)**, 파일 통계, 사용자, 작업 로그 |
 
 ## 인증·권한 흐름 (유지)
 
@@ -78,6 +78,15 @@ npm run preview
 - **keyword** 모드 선택 시: 임베딩 없이 키워드 검색만 쓴다는 짧은 안내 배너.
 - **dry_run:** LLM 없이 `context_preview` 테이블로 후보 청크를 확인. 일반 답변과 **근거 부족** 문구는 서로 다른 스타일 박스로 구분.
 - 브라우저 세션에 옵션·결과를 저장(`ragSessionCache` v2)해 새로고침 후에도 복원됩니다.
+
+## 작업 목록 (`/admin/jobs`)
+
+- **API:** `src/api/adminJobsApi.ts` — `GET /api/admin/jobs`, `GET /api/admin/jobs/{id}`, `GET /api/admin/jobs/{id}/failures` (`src/types/adminJobs.ts`).
+- **필터:** `status`, `job_type`, `data_source_id`, `keyword`(소스 이름·`current_file_path`·`error_message` ILIKE), `from_date` / `to_date`, `limit`(20/50/100), `offset`. **조회** 시 적용·offset 리셋, **초기화**로 필터 초기화.
+- **목록:** job_type·상태 배지·소스명·시작/종료·`formatDuration` 소요 시간·진행률(퍼센트 + processed/total)·완료/실패/스킵/삭제 카운트·오류 요약·**상세** 버튼.
+- **상세:** 모달에서 job 메타·카운터·`error_message` 및 **실패 목록** 테이블(`scan_failures`). 실패가 없으면 `EmptyState`.
+- **경고:** `scan_jobs` / `scan_failures` 테이블이 없는 개발 DB에서는 API가 빈 목록과 `warnings`를 주며 UI에 안내합니다.
+- **조회 전용:** 취소·재시도·백그라운드 실행은 worker 도입 후 예정입니다. `action_logs`에 이 화면의 조회를 남기지 않습니다(백엔드 README와 동일 정책).
 
 ## 작업 로그 (`/admin/action-logs`)
 

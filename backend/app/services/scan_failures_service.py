@@ -22,11 +22,17 @@ Document processing (``process-pending-documents``) additionally records:
 - ``PARSING_FAILED``
 - ``PASSWORD_PROTECTED``
 - ``NO_EXTRACTABLE_TEXT``
+
+Chunking (``chunk-completed-text``) may record:
+
+- ``CHUNK_SAVE_FAILED`` — DB/chunk insert failures (persisted when the DB allows this ``error_code`` value; if ``scan_failures.error_code`` is a PostgreSQL enum that does not yet list ``CHUNK_SAVE_FAILED``, the insert is skipped safely — add the enum label via migration).
 """
 
 from __future__ import annotations
 
 from uuid import UUID
+
+import psycopg
 
 from app.db.database import get_db_connection
 
@@ -58,6 +64,7 @@ _PERSISTABLE_ERROR_CODES: frozenset[str] = frozenset(
         "PARSING_FAILED",
         "PASSWORD_PROTECTED",
         "NO_EXTRACTABLE_TEXT",
+        "CHUNK_SAVE_FAILED",
     }
 )
 
@@ -105,6 +112,9 @@ def record_scan_failure(
                     ),
                 )
             conn.commit()
+    except psycopg.errors.InvalidTextRepresentation:
+        # e.g. error_code enum missing CHUNK_SAVE_FAILED — see migration TODO in module docstring
+        return
     except Exception:
         # Best-effort. ``scan_failures`` may not exist yet, or the column
         # set may not match this schema assumption; either way the main

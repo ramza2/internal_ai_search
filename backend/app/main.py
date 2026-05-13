@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.admin_action_logs import router as admin_action_logs_router
 from app.api.admin_dashboard import router as admin_dashboard_router
+from app.api.admin_jobs import router as admin_jobs_router
 from app.api.admin_users import router as admin_users_router
 from app.api.answer import router as answer_router
 from app.api.auth import router as auth_router
@@ -51,6 +52,7 @@ async def _http_exception_handler(_request: Request, exc: HTTPException) -> JSON
 app.include_router(health_router, tags=["health"])
 app.include_router(admin_action_logs_router)
 app.include_router(admin_dashboard_router)
+app.include_router(admin_jobs_router)
 app.include_router(auth_router)
 app.include_router(admin_users_router)
 app.include_router(data_sources_router)
