@@ -4,3 +4,5 @@ pydantic-settings
 psycopg[binary]
 httpx
 cryptography
+bcrypt
+PyJWT

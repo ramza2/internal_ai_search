@@ -18,6 +18,9 @@ This backend follows a phased roadmap. Implemented so far:
 - **Step 14:** Chunk embedding pass (`POST /api/data-sources/{id}/embed-pending-chunks`) — reuses the Step-3 Ollama client (`bge-m3`, dimension **1024**) to vectorize chunks whose `embedding IS NULL` (or every COMPLETED chunk when `reembed=true`), writes the result into `document_chunks.embedding vector(1024)` via parameter-bound `%s::vector` casts, and bumps `files.last_indexed_at = NOW()` *only* once every chunk of that file carries a non-`NULL` vector. Per-batch transactions isolate failures (dimension mismatch / API error / DB error stay item-level). No search, retrieval, RAG, or chat endpoints are introduced.
 - **Step 15:** Vector search API (`POST /api/search`) — embeds the user's free-text `query` via the same Ollama model, runs a `pgvector` cosine search against `document_chunks.embedding`, joins `files` and `data_sources` for descriptive context, filters out `DELETED / FAILED / SKIPPED / not-yet-indexed` rows, and returns the top-K hits with a ≤ 300-char snippet (never the full `chunk_text`). Optional filters: `data_source_id`, `include_extensions`, `min_score`, `file_type`. **No RAG, no LLM answer generation, no chat, no hybrid keyword search** — those land in dedicated follow-up endpoints.
 - **Step 16:** RAG answer API (`POST /api/answer`) — reuses the Step-15 search pipeline to retrieve top-K chunks, builds a structured Korean prompt that pins the model to the retrieved context (with prompt-injection neutralization), calls Ollama `/api/generate` against the configured `OLLAMA_MODEL` (`gemma3`), and returns `answer` + `citations` (citations are always drawn from the actual search result, never from anything the model emitted). When no chunk clears `answer_min_score` the LLM is **not** called — a fixed "근거 부족" reply is returned together with sub-threshold citations. `dry_run=true` builds the would-be context preview without calling the LLM. **No chat sessions, no conversation history, no streaming, no hybrid keyword search.**
+- **Step 17:** Hybrid keyword search — `POST /api/search` gains a `search_mode` knob (`vector` *(default, unchanged)* / `keyword` / `hybrid`). `keyword` runs an `ILIKE` candidate fetch over `files.filename`, `files.remote_path`, and `document_chunks.chunk_text` **without** calling Ollama, scores each row in Python (phrase + token bonuses, clamped at 1.0, with `match_reasons` like `FILENAME_MATCH` / `CHUNK_TOKEN_MATCH`), and returns the top-K. `hybrid` runs both paths against bounded candidate pools (`vector_candidate_limit` / `keyword_candidate_limit`, default 50 each), merges by `chunk_id`, and ranks by `final_score = (vector_weight·vector_score + keyword_weight·keyword_score) / (vector_weight + keyword_weight)`. `POST /api/answer` accepts the same `search_mode` and forwards it to the underlying search call, so RAG can now reuse hybrid retrieval without any prompt changes. `chunk_text` is still never returned. **No PostgreSQL full-text search, no BM25, no cross-encoder reranker, no prompt changes.**
+- **Step 18:** File / chunk preview — `GET /api/files/{file_id}/preview` and `GET /api/files/{file_id}/chunks/{chunk_id}/preview` return metadata plus a **bounded** (`max_chars`) line-numbered slice of `file_contents.extracted_text` for UI click-through from search / RAG citations. Optional `query` adds offset-only highlights (no HTML). `open_info` carries credential-free WebDAV URL parts. **No** WebDAV download, file mutation, or RBAC yet.
+- **Step 19:** Auth + admin users — `POST /api/auth/signup` (PENDING user), `POST /api/auth/login` (JWT for ACTIVE only), `GET /api/auth/me`, `POST /api/auth/change-password`, and admin-only `GET/PATCH /api/admin/users/...` (approve, activate, deactivate, lock, role). Startup bootstraps the first `ADMIN` from `INITIAL_ADMIN_*` when none exists (`must_change_password=true`). Dependencies: `bcrypt`, `PyJWT`. **No** SSO/LDAP, email verify, MFA, or auth on existing search/RAG/data-source routes yet (planned gradual rollout).
 
 ## Project structure
 
@@ -27,6 +30,9 @@ backend/
 │  ├─ main.py
 │  ├─ core/
 │  │  ├─ config.py
+│  │  ├─ auth_dependencies.py
+│  │  ├─ jwt_tokens.py
+│  │  ├─ password.py
 │  │  └─ security.py
 │  ├─ db/
 │  │  ├─ database.py
@@ -48,13 +54,17 @@ backend/
 │  │  ├─ listing.py
 │  │  └─ recursive_listing.py
 │  ├─ api/
-│  │  ├─ health.py
+│  │  ├─ admin_users.py
+│  │  ├─ answer.py
+│  │  ├─ auth.py
 │  │  ├─ data_sources.py
 │  │  ├─ files.py
-│  │  ├─ search.py
-│  │  └─ answer.py
+│  │  ├─ health.py
+│  │  └─ search.py
 │  ├─ services/
-│  │  ├─ __init__.py
+│  │  ├─ admin_users_service.py
+│  │  ├─ auth_bootstrap_service.py
+│  │  ├─ auth_service.py
 │  │  ├─ chunk_embedding_repository.py
 │  │  ├─ chunk_embedding_service.py
 │  │  ├─ chunk_text_processor_service.py
@@ -64,6 +74,7 @@ backend/
 │  │  ├─ embedding_models_service.py
 │  │  ├─ exclusion_policy_service.py
 │  │  ├─ file_contents_service.py
+│  │  ├─ file_preview_service.py
 │  │  ├─ file_recursive_sync_service.py
 │  │  ├─ file_stats_service.py
 │  │  ├─ file_sync_service.py
@@ -78,13 +89,19 @@ backend/
 │  ├─ utils/
 │  │  ├─ __init__.py
 │  │  ├─ file_type.py
+│  │  ├─ highlight.py
 │  │  └─ snippet.py
 │  └─ schemas/
 │     ├─ answer.py
+│     ├─ auth.py
 │     ├─ data_source.py
+│     ├─ file_preview.py
 │     └─ search.py
+├─ db/
+│  └─ migrations/
+│     └─ 019_app_users.sql
 ├─ requirements.txt
-├─ .env.example
+├─ .env   (local only; gitignored — create next to this README)
 └─ README.md
 ```
 
@@ -116,17 +133,13 @@ pip install -r requirements.txt
 
 ## 2) Environment variables
 
-Create `.env` from `.env.example` and fill values:
+The API loads **`backend/.env`** only (see `env_file=".env"` on `Settings` in `app/core/config.py`). Pydantic maps each setting field to an **`UPPER_SNAKE_CASE`** environment variable with the same name as the field (for example `db_host` → `DB_HOST`). Unset variables use the **defaults in code**; put secrets and host-specific overrides in `.env`.
 
-```bash
-cp .env.example .env
-```
+**Do not commit `.env`** — it is listed in `backend/.gitignore`. Each machine keeps its own file.
 
-On Windows PowerShell:
+Recognized variables (override as needed):
 
-```powershell
-Copy-Item .env.example .env
-```
+`SERVICE_NAME`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT_SECONDS`, `OLLAMA_GENERATE_TIMEOUT_SECONDS`, `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSION`, `EMBEDDING_TEST_TEXT`, `EMBEDDING_TIMEOUT_SECONDS`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DATA_SOURCE_SECRET_KEY`, `WEBDAV_TIMEOUT_SECONDS`, `JWT_SECRET_KEY`, `JWT_ALGORITHM`, `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `INITIAL_ADMIN_LOGIN_ID`, `INITIAL_ADMIN_PASSWORD`, `INITIAL_ADMIN_NAME`, `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_DEPARTMENT`, `PASSWORD_MIN_LENGTH`
 
 ### Database (Step 1)
 
@@ -146,6 +159,14 @@ Copy-Item .env.example .env
   ```
 
   or supply any non-empty string (the backend derives a Fernet-compatible key via SHA-256 — convenient for development, weaker than a dedicated key). Rotate before production and **never** commit production keys.
+
+### Authentication & JWT (Step 19)
+
+- `JWT_SECRET_KEY` — **must** be a long random string in production (never commit the real value).
+- `JWT_ALGORITHM` — default `HS256`.
+- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` — access-token lifetime (default `720`).
+- `INITIAL_ADMIN_LOGIN_ID`, `INITIAL_ADMIN_PASSWORD`, `INITIAL_ADMIN_NAME`, `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_DEPARTMENT` — used **only** when the database has **zero** `ADMIN` rows at startup. Leave `INITIAL_ADMIN_PASSWORD` empty to skip bootstrap. **Change** `INITIAL_ADMIN_PASSWORD` immediately after first deploy, then use `POST /api/auth/change-password`.
+- `PASSWORD_MIN_LENGTH` — minimum length for signup / password change (default `8`).
 
 ### WebDAV probe, listing, and sync (Steps 6–8, 10)
 
@@ -684,7 +705,7 @@ curl -X POST "http://localhost:8000/api/data-sources/{id}/embed-pending-chunks?r
 
 Embeds the request's `query` via the same Ollama model (`bge-m3`, dimension **1024**) used by Step 14, then runs a `pgvector` **cosine** search (`<=>`) against `document_chunks.embedding vector(1024)`, joining `files` and `data_sources` so each hit carries `filename`, `remote_path`, `extension`, `file_type` label, `last_modified`, `last_indexed_at`, `data_source_name`, and `source_type`. Each returned chunk's `chunk_text` is **never** exposed — the response contains a ≤ **300-char** `snippet` centered on the query (or the leading 300 chars when the query is not a literal substring).
 
-This is the first read-side endpoint in the project; it intentionally does **no** retrieval-augmented generation, **no** LLM answer composition, **no** chat session handling, and **no** hybrid keyword (`ILIKE`) merging — those are deferred to dedicated follow-up endpoints so the pure vector path can be tuned independently.
+This is the first read-side endpoint in the project; it intentionally does **no** retrieval-augmented generation, **no** LLM answer composition, and **no** chat session handling. Step 17 layered keyword + hybrid retrieval onto the same endpoint via a `search_mode` knob — the **vector default is unchanged** so an existing Step-15 caller that does not send `search_mode` gets byte-identical results.
 
 - **Request body**
   - `query` *(required, string)* — search text. Trimmed; empty/whitespace-only ⇒ `400 Search query is required`.
@@ -727,10 +748,10 @@ This is the first read-side endpoint in the project; it intentionally does **no*
 - **Security / logging policy**
   - `chunk_text` is never returned and never logged — only the trimmed snippet is. Credentials are not touched in this endpoint.
   - The `query` string is treated like any other user input (no command/SQL injection — vector + extension filters are parameter-bound), but it is **not** persisted to `action_logs` yet because authentication is not implemented.
-- **Out of scope at this milestone**
+- **Out of scope for the Step-15 vector path** *(Step 17 below covers keyword + hybrid)*
   - RAG: assembling top-K results into an LLM context and generating an answer.
   - LLM answer / chat endpoints.
-  - Hybrid keyword search (boost `filename` / `remote_path` `ILIKE` hits, BM25, reranker models).
+  - BM25 / PostgreSQL full-text search (`tsvector`) / cross-encoder reranker.
   - Click tracking, file preview, download proxies.
   - User login / RBAC.
   - Frontend.
@@ -803,10 +824,10 @@ Flow: `query → search_service.run_search_with_chunk_texts → score / budget f
   - The user `query` is treated as untrusted text; the LLM call sends it only inside the `[질문]` block, after the rule preamble.
   - Document `[문서]` bodies are likewise treated as untrusted — embedded injection sentences cannot redirect the model because the rule preamble explicitly says so and the fenced code wrappers delimit the regions.
   - Credentials are not touched on this endpoint.
-- **Out of scope at this milestone**
+- **Out of scope for Step 16** *(Step 17 wired `search_mode` through, but the prompt + LLM call were not touched)*
   - Chat session storage, conversation history, follow-up question handling.
   - Streaming `text/event-stream` responses (the call always uses `stream=false`).
-  - Hybrid keyword search (filename / path `ILIKE`, BM25, reranker models).
+  - BM25 / PostgreSQL full-text search / cross-encoder reranker.
   - Click tracking, file preview / download proxies.
   - User login / RBAC and `action_logs` query persistence.
   - Frontend.
@@ -842,7 +863,184 @@ curl -X POST "http://localhost:8000/api/answer" \
       }'
 ```
 
+### Hybrid keyword search (`POST /api/search` + `POST /api/answer`, Step 17)
+
+Step 17 layered a keyword retrieval path next to the existing pgvector cosine search. Both endpoints (`/api/search`, `/api/answer`) now accept a `search_mode` body field with three values:
+
+- **`vector`** *(default, unchanged from Step 15)* — embed `query` via `bge-m3` and run the same cosine search against `document_chunks.embedding`. `score` equals `vector_score`; `keyword_score` is `null`.
+- **`keyword`** — **no Ollama embedding call**. Run a parameter-bound `ILIKE` candidate fetch (`ESCAPE '!'`) over `lower(files.filename)`, `lower(files.remote_path)`, and `lower(document_chunks.chunk_text)`, plus per-token arrays when the query has multiple whitespace-split tokens. Score each row in Python (phrase bonuses + token bonuses, clamped at 1.0). `embedding_model` / `embedding_provider` / `expected_dimension` are `null` in the response because the model was never asked. Useful when the user is searching for an exact identifier (a table name, a class name, a SQL keyword) or when the embedding model is temporarily unreachable.
+- **`hybrid`** — run both paths against bounded candidate pools (`vector_candidate_limit` / `keyword_candidate_limit`, default 50, range 1–200), then merge by `chunk_id` and rank by `final_score = (vector_weight·vector_score + keyword_weight·keyword_score) / (vector_weight + keyword_weight)`. Defaults: `vector_weight=0.7`, `keyword_weight=0.3`. The validator rejects `0.0 / 0.0`.
+
+The vector default keeps Step-15 clients byte-identical: a request body without `search_mode` continues to embed the query and run pgvector cosine search.
+
+- **New request fields (`POST /api/search`)**
+  - `search_mode` *(default `"vector"`)* — one of `"vector"` / `"keyword"` / `"hybrid"` (case-insensitive). Unknown values surface as `422 Invalid request body`.
+  - `vector_weight`, `keyword_weight` *(defaults `0.7` / `0.3`, range `0.0`–`1.0`)* — hybrid blend. Sum must be > 0.
+  - `vector_candidate_limit`, `keyword_candidate_limit` *(defaults `50`, range `1`–`200`)* — pre-merge candidate pool sizes. Typically larger than `limit` so the merge has enough headroom to re-rank.
+- **Shared scope predicate** — keyword + hybrid honor the same scope as the vector path: `files.is_directory = FALSE`, `analysis_status = 'COMPLETED' AND <> 'DELETED'`, `last_indexed_at IS NOT NULL`, `data_sources.is_active = TRUE`, `chunk_text IS NOT NULL AND chunk_text <> ''`. `data_source_id`, `include_extensions`, and `file_type` apply identically (the first two in SQL; `file_type` as a Python post-filter after ranking).
+- **Keyword SQL shape**
+  - `lower(f.filename) LIKE %s ESCAPE '!' OR lower(f.remote_path) LIKE %s ESCAPE '!' OR lower(dc.chunk_text) LIKE %s ESCAPE '!'` plus optional `LIKE ANY(%s::text[])` token arrays when the query has multiple tokens.
+  - Patterns are produced server-side via `_like_escape` so `%`, `_`, and the escape char itself in the user `query` are treated as literal characters.
+  - `ORDER BY` gives priority to phrase matches (`CASE WHEN ... THEN 0 ELSE 1 END`) and breaks ties by `remote_path` / `chunk_index` for determinism; the candidate pool is then bounded by `keyword_candidate_limit` and re-scored in Python.
+- **Keyword scoring** *(Python — see `_compute_keyword_score`)*
+  - Phrase contribution: `+1.0` filename, `+0.8` remote_path, `+0.7` chunk_text.
+  - Token contribution: `+0.3` filename, `+0.2` remote_path, `+0.15` chunk_text, **per matched token**.
+  - Phrase + token in the same field do not stack (so a single-word query that hits a filename scores 1.0, not 1.3).
+  - Score is clamped to `1.0`. `match_reasons` is one or more of `FILENAME_MATCH / PATH_MATCH / CHUNK_TEXT_MATCH / FILENAME_TOKEN_MATCH / PATH_TOKEN_MATCH / CHUNK_TOKEN_MATCH`.
+- **Hybrid merge**
+  - Vector candidates are pulled with `min_score=0` so `min_score` only filters the *final* score. Keyword candidates run against the same scope.
+  - Merge key: `chunk_id`. When a chunk only hits one side, the missing score is treated as `0` in the blend. The metadata (filename / remote_path / line range / etc.) prefers the vector-side row when both exist (it already carries the cosine `distance`).
+  - Sort: `final_score DESC, keyword_score DESC, vector_score DESC, filename ASC` (deterministic tie-breaking).
+  - `min_score` applies per mode: vector ⇒ `vector_score`, keyword ⇒ `keyword_score`, hybrid ⇒ `final_score`.
+- **Snippets** — Step 15's `build_snippet` is reused for vector hits. Keyword + hybrid hits use the new `build_snippet_with_tokens` helper, which first tries the full `query` phrase and then falls back to the earliest-matching token so the ≤ 300-char window stays informative even when the query is multi-word. Full `chunk_text` is still **never** returned.
+- **Response shape** *(extended; same envelope across modes)*
+  - `search_mode`, `weights = { vector_weight, keyword_weight }`, `embedding_*` (nullable for keyword mode).
+  - Each `results[]` row carries `score`, `final_score`, `vector_score` *(nullable)*, `keyword_score` *(nullable)*, `distance` *(nullable — `null` for keyword-only hits)*, `match_reasons[]`, `search_mode`, plus the same descriptive context as Step 15.
+- **`POST /api/answer` integration** — `AnswerRequest` also accepts `search_mode` *(default `"vector"`)* plus the same `vector_weight` / `keyword_weight` overrides; the RAG service forwards them into `SearchRequest`, so hybrid retrieval can feed the same Step-16 prompt without any changes to the LLM call. Citations now carry `final_score / vector_score / keyword_score / match_reasons / search_mode` alongside the existing fields.
+- **Error mapping**
+  - Empty `query` → `400 Search query is required` (unchanged).
+  - Unknown `search_mode` or `vector_weight + keyword_weight = 0` for `hybrid` → `422 Invalid request body` (the schema validator's payload echoes the failing field so callers can see which knob is wrong).
+  - Missing / inactive `data_source_id` → `404 Data source not found` (unchanged across modes).
+  - Embedding call failure (`vector` / `hybrid` only — `keyword` never calls Ollama) → `502 Failed to generate embedding for query`.
+  - Keyword / hybrid DB failure → `500 Search query failed`.
+  - Any other unexpected exception → `500 Internal server error`. The server never crashes on bad input.
+- **Security / logging policy** — unchanged from Step 15/16: `chunk_text` is never returned and never logged, only the ≤ 300-char snippet; the `query` is treated as untrusted text and bound through psycopg parameters (including the LIKE patterns themselves, with the `!` escape char) so it cannot inject SQL; credentials are never touched by the search / answer endpoints.
+- **Why we did *not* implement BM25 / `pg_trgm` index / reranker this milestone**
+  - The goal of Step 17 is "vector + keyword merge that beats vector-only for exact-name queries and code identifiers", not "best-in-class keyword scoring". `ILIKE` over reasonably small candidate pools is enough to surface filename / table-name hits that the cosine search misses on short queries, and the merged ranker is easy to tune (just adjust `vector_weight` / `keyword_weight`). BM25 / `pg_trgm` GIN indexes / cross-encoder rerankers add operational cost (extension installs, larger memory footprint, second LLM model on the hot path) that we want to evaluate against real recall/latency numbers before paying. They are explicit follow-up candidates (see "Notes" below).
+
+```bash
+# Keyword-only — useful for identifier searches (no Ollama call)
+curl -X POST "http://localhost:8000/api/search" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "query": "JWTUtil",
+        "search_mode": "keyword",
+        "limit": 10
+      }'
+
+# Hybrid — vector + keyword blended by chunk_id
+curl -X POST "http://localhost:8000/api/search" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "query": "JWT 토큰 생성 로직",
+        "search_mode": "hybrid",
+        "vector_weight": 0.7,
+        "keyword_weight": 0.3,
+        "limit": 20
+      }'
+
+# RAG answer over hybrid retrieval (prompt / LLM call unchanged)
+curl -X POST "http://localhost:8000/api/answer" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "query": "A 프로젝트 배포 절차 알려줘",
+        "search_mode": "hybrid",
+        "context_limit": 5
+      }'
+
+# Asymmetric weights — bias toward keyword when the user types an exact name
+curl -X POST "http://localhost:8000/api/search" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "query": "EMP_OVERTIME_MST",
+        "search_mode": "hybrid",
+        "vector_weight": 0.3,
+        "keyword_weight": 0.7,
+        "keyword_candidate_limit": 100
+      }'
+```
+
+### File / chunk preview (`GET /api/files/...`, Step 18)
+
+Search (`POST /api/search`) and RAG (`POST /api/answer`) already return `file_id`, `chunk_id`, `start_line`, `end_line`, and `snippet`. Step 18 adds **read-only preview** endpoints so a UI can open a file or jump to a citation without re-downloading from WebDAV:
+
+- `GET /api/files/{file_id}/preview`
+- `GET /api/files/{file_id}/chunks/{chunk_id}/preview` — same behaviour as `.../preview?chunk_id={chunk_id}`.
+
+**Body source:** `file_contents.extracted_text` only (Step 12). **No** WebDAV `GET`, **no** file mutation. **Never** returns `credential_secret`, `credential_secret_enc`, or `Authorization`.
+
+**Gate:** `files` exists, `data_sources.is_active`, `files.is_directory = false`, `files.analysis_status = 'COMPLETED'` and not `DELETED`, and `file_contents` with non-empty `extracted_text` / `text_length > 0`.
+
+**Query params (`/preview`):** `chunk_id` (optional UUID), `start_line` / `end_line` (optional ints), `context_lines` (default `20`, `0`–`200`), `max_chars` (default `20000`, `1000`–`100000`), `query` (optional, highlight), `include_full_text` (default `false`; still capped by `max_chars`). Chunk wins over explicit lines when both are sent.
+
+**Highlighting:** whitespace tokens, length ≥ 2, case-insensitive substring search per preview line; up to **100** hits as `{ term, line, start_offset, end_offset }` with offsets in the **raw line** (no `"N: "` prefix). No HTML.
+
+**`file.open_info`:** `data_source_id`, `server_url`, `webdav_root_path`, `remote_path`, `webdav_url` (from `build_file_url`, credential-free).
+
+**RBAC:** no authentication yet — anyone who knows a `file_id` can call preview; add ACL checks after login lands.
+
+```bash
+curl "http://localhost:8000/api/files/{file_id}/preview"
+
+curl "http://localhost:8000/api/files/{file_id}/preview?start_line=100&end_line=150&context_lines=10"
+
+curl "http://localhost:8000/api/files/{file_id}/preview?chunk_id={chunk_id}&query=JWT"
+
+curl "http://localhost:8000/api/files/{file_id}/chunks/{chunk_id}/preview?context_lines=20&query=JWT"
+```
+
+### Authentication & admin users (Step 19)
+
+**Schema:** `app_users` with `user_role` (`USER`, `ADMIN`) and `user_status` (`PENDING`, `ACTIVE`, `INACTIVE`, `LOCKED`). Apply `db/migrations/019_app_users.sql` once if the table does not exist.
+
+**Initial admin:** On application startup, if **no** row with `role = ADMIN` exists, the server inserts one admin from `INITIAL_ADMIN_*` env vars (`must_change_password=true`, `status=ACTIVE`). If `INITIAL_ADMIN_PASSWORD` is empty, bootstrap is skipped (warning log). Failures are **non-fatal** — the API still starts (e.g. missing table in early dev).
+
+**Signup:** `POST /api/auth/signup` creates `USER` + `PENDING`; duplicate `login_id` → **409**. PENDING users **cannot** log in (**403**).
+
+**Login:** `POST /api/auth/login` — only `ACTIVE` users receive a JWT (`HS256`, `sub` = user UUID). Wrong credentials → **401** (generic message). `PENDING` → **403** `"Account is pending approval"`. `INACTIVE` / `LOCKED` → **403**.
+
+**JWT:** Send `Authorization: Bearer <access_token>` to `GET /api/auth/me` and `POST /api/auth/change-password`. Expiry: `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` (default 720). Invalid/expired token → **401**. Non-`ACTIVE` user with a still-valid token → **403** on `/me`.
+
+**Password policy:** `PASSWORD_MIN_LENGTH` (default 8); bcrypt truncates at 72 bytes (longer passwords rejected).
+
+**Admin APIs:** `GET /api/admin/users` and `PATCH .../approve|deactivate|lock|activate|role` require **`ACTIVE` + `ADMIN`**. Query filters: `status`, `role`, `keyword`, `limit` (≤200), `offset`.
+
+**Last-admin guard:** Deactivate, lock, or demote (`role` → `USER`) the **sole** `ACTIVE` `ADMIN` → **400** `"Cannot remove the last active administrator from the system"`.
+
+**Not in this step:** SSO/LDAP, email verification, MFA, password reset email, `action_logs`, ownCloud ACL sync, **enforcing auth on** `POST /api/search`, `POST /api/answer`, `GET /api/files/.../preview`, or data-source sync routes — those will be wired via `require_active_user` / `require_admin_user` in a follow-up milestone.
+
+**Production checklist — change before go-live:**
+
+- `JWT_SECRET_KEY` — long random secret.
+- `INITIAL_ADMIN_PASSWORD` — strong unique password (then log in and use **change-password**).
+- `DATA_SOURCE_SECRET_KEY` — already required for credential encryption (see Step 5).
+
+```bash
+# Signup (PENDING — admin must approve)
+curl -X POST "http://localhost:8000/api/auth/signup" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "login_id": "hong",
+    "password": "Password123!",
+    "name": "홍길동",
+    "email": "hong@example.com",
+    "department": "개발팀"
+  }'
+
+# Login (ACTIVE only)
+curl -X POST "http://localhost:8000/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "login_id": "admin",
+    "password": "ChangeMe123!"
+  }'
+
+curl "http://localhost:8000/api/auth/me" \
+  -H "Authorization: Bearer <token>"
+
+curl -X POST "http://localhost:8000/api/auth/change-password" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "current_password": "ChangeMe123!",
+    "new_password": "NewPassword123!"
+  }'
+
+curl -X PATCH "http://localhost:8000/api/admin/users/{user_id}/approve" \
+  -H "Authorization: Bearer <admin-token>"
+```
+
 ## Notes
 
-- Steps 1–16 wire health checks, pgvector smoke tests, credential-safe data-source CRUD, a **minimal** DAV probe, **one-level** WebDAV previews and sync, a read-only **file statistics** endpoint, a **bounded recursive** WebDAV sync (BFS, Depth:1 per folder, `max_depth` / `max_items`) with **`exclusion_policies`** applied, **opt-in soft-mark deletion detection** for that recursive sync, **PENDING text-file download + plain-text extraction** into `file_contents`, **character-based chunking** into `document_chunks`, the **chunk-embedding pass** that fills `document_chunks.embedding vector(1024)` and bumps `files.last_indexed_at` once a file is fully embedded, a **vector search API** (`POST /api/search`) returning ≤ 300-char snippets keyed off `pgvector` cosine similarity, and a **RAG answer API** (`POST /api/answer`) that turns those snippets into a context-grounded Korean answer with citations — still **no** chat sessions, conversation history, streaming responses, hybrid keyword search, PDF/DOCX/HWP/XLSX parsing, authenticated UI, or RBAC.
-- Structure is kept small for later ingestion, delta sync, scheduling, Docker Compose packaging, React admin screens, hybrid + reranker search, and chat APIs.
+- Steps 1–19 wire health checks, pgvector smoke tests, credential-safe data-source CRUD, a **minimal** DAV probe, **one-level** WebDAV previews and sync, a read-only **file statistics** endpoint, a **bounded recursive** WebDAV sync (BFS, Depth:1 per folder, `max_depth` / `max_items`) with **`exclusion_policies`** applied, **opt-in soft-mark deletion detection** for that recursive sync, **PENDING text-file download + plain-text extraction** into `file_contents`, **character-based chunking** into `document_chunks`, the **chunk-embedding pass** that fills `document_chunks.embedding vector(1024)` and bumps `files.last_indexed_at` once a file is fully embedded, a **vector + hybrid keyword search API** (`POST /api/search`), a **RAG answer API** (`POST /api/answer`), **file / chunk preview** (`GET /api/files/{file_id}/preview`, …), and **JWT auth + signup/approval + admin user management** (`/api/auth/*`, `/api/admin/users/*`, initial admin bootstrap) — **without** yet requiring a token on search/RAG/preview/data-source routes (that is deferred so integration tests stay simple until the UI lands).
+- Structure is kept small for later ingestion, delta sync, scheduling, Docker Compose packaging, React admin screens, and chat APIs. Search-side follow-ups under consideration: a **`pg_trgm` GIN index** on `lower(filename)` / `lower(remote_path)` so the keyword candidate fetch scales beyond ~10k chunks per source; a **PostgreSQL full-text search (`tsvector` + `to_tsquery`) column** layered alongside `chunk_text` so the keyword scorer can use language-aware lexemes instead of `ILIKE`; a **BM25** scorer (e.g. `pg_search` or an in-process re-ranker) for the keyword side; and an optional **cross-encoder reranker** that re-orders the top-N of a hybrid run.

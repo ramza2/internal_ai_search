@@ -20,6 +20,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.search import (
+    DEFAULT_KEYWORD_WEIGHT,
+    DEFAULT_VECTOR_WEIGHT,
     DataSourceScope,
     LIMIT_MAX as _SEARCH_LIMIT_MAX,
     LIMIT_MIN as _SEARCH_LIMIT_MIN,
@@ -27,6 +29,9 @@ from app.schemas.search import (
     QUERY_MIN_LEN,
     SCORE_MAX,
     SCORE_MIN,
+    SearchMode,
+    WEIGHT_MAX,
+    WEIGHT_MIN,
 )
 
 
@@ -80,6 +85,17 @@ class AnswerRequest(BaseModel):
     ] = 12_000
     dry_run: bool = False
 
+    # Step-17: surface the search mode + weights so the RAG path can
+    # request the hybrid blend without changing the prompt or the
+    # downstream LLM call. Defaults preserve Step-16 behaviour exactly.
+    search_mode: SearchMode = SearchMode.VECTOR
+    vector_weight: Annotated[
+        float, Field(ge=WEIGHT_MIN, le=WEIGHT_MAX)
+    ] = DEFAULT_VECTOR_WEIGHT
+    keyword_weight: Annotated[
+        float, Field(ge=WEIGHT_MIN, le=WEIGHT_MAX)
+    ] = DEFAULT_KEYWORD_WEIGHT
+
     @field_validator("query")
     @classmethod
     def _trim_query(cls, v: str) -> str:
@@ -118,6 +134,23 @@ class AnswerRequest(BaseModel):
         s = v.strip().upper()
         return s or None
 
+    @field_validator("search_mode", mode="before")
+    @classmethod
+    def _normalize_search_mode(cls, v):  # type: ignore[no-untyped-def]
+        # Accept case-insensitive strings the same way SearchRequest
+        # does so /api/answer mirrors /api/search.
+        if isinstance(v, SearchMode):
+            return v
+        if isinstance(v, str):
+            tok = v.strip().lower()
+            for mode in SearchMode:
+                if mode.value == tok:
+                    return mode
+            raise ValueError(
+                "search_mode must be one of: vector, keyword, hybrid"
+            )
+        return v
+
 
 class AnswerCitation(BaseModel):
     """One citation row — mirrors Step-15's :class:`SearchResultItem`.
@@ -131,6 +164,15 @@ class AnswerCitation(BaseModel):
 
     rank: int
     score: float
+    # Step-17 score breakdown — kept optional so vector / keyword
+    # citations stay readable. ``final_score`` always matches
+    # ``score`` so the field is just an explicit alias for the
+    # ranking score.
+    final_score: float
+    vector_score: float | None = None
+    keyword_score: float | None = None
+    match_reasons: list[str] = []
+    search_mode: SearchMode = SearchMode.VECTOR
     data_source_id: UUID
     data_source_name: str
     source_type: str
@@ -200,8 +242,12 @@ class AnswerResponse(BaseModel):
     query: str
     answer: str | None
     model: str | None
-    embedding_model: str
-    embedding_provider: str
+    # Step-17: keyword-mode answers do not embed the query, so these
+    # fields are now optional. Vector / hybrid responses still carry
+    # the populated provider + model name.
+    embedding_model: str | None = None
+    embedding_provider: str | None = None
+    search_mode: SearchMode = SearchMode.VECTOR
     data_source_scope: DataSourceScope
     search: AnswerSearchEnvelope
     citations: list[AnswerCitation]
@@ -229,6 +275,9 @@ def public_request_dict(req: AnswerRequest) -> dict[str, Any]:
         "include_extensions": list(req.include_extensions or []),
         "file_type": req.file_type,
         "max_context_chars": req.max_context_chars,
+        "search_mode": req.search_mode.value,
+        "vector_weight": req.vector_weight,
+        "keyword_weight": req.keyword_weight,
     }
 
 

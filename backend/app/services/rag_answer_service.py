@@ -174,6 +174,7 @@ def run_answer(settings: Settings, request: AnswerRequest) -> AnswerResponse:
             model=settings.ollama_model,
             embedding_model=search_response.embedding_model,
             embedding_provider=search_response.embedding_provider,
+            search_mode=search_response.search_mode,
             data_source_scope=scope,
             search=envelope,
             citations=citations if used_context_count else [],
@@ -193,6 +194,7 @@ def run_answer(settings: Settings, request: AnswerRequest) -> AnswerResponse:
             model=settings.ollama_model,
             embedding_model=search_response.embedding_model,
             embedding_provider=search_response.embedding_provider,
+            search_mode=search_response.search_mode,
             data_source_scope=scope,
             search=envelope,
             # Surface citations for sub-threshold hits so the caller
@@ -207,11 +209,14 @@ def run_answer(settings: Settings, request: AnswerRequest) -> AnswerResponse:
 
     # ---- normal LLM call ------------------------------------------
     prompt = _build_rag_prompt(query=request.query, entries=context_entries)
+    # Use the generate-specific timeout (decoupled from the /api/tags
+    # health probe), which is normally much longer because gemma3 on
+    # CPU can take 30–60s per answer in dev setups.
     llm_result = generate_completion(
         base_url=settings.ollama_base_url,
         model=settings.ollama_model,
         prompt=prompt,
-        timeout_seconds=settings.ollama_timeout_seconds,
+        timeout_seconds=settings.ollama_generate_timeout_seconds,
         temperature=request.temperature,
     )
     if not llm_result.success or not llm_result.answer:
@@ -230,6 +235,7 @@ def run_answer(settings: Settings, request: AnswerRequest) -> AnswerResponse:
         model=llm_result.model or settings.ollama_model,
         embedding_model=search_response.embedding_model,
         embedding_provider=search_response.embedding_provider,
+        search_mode=search_response.search_mode,
         data_source_scope=scope,
         search=envelope,
         citations=citations,
@@ -266,6 +272,12 @@ def _run_underlying_search(
         if request.include_extensions
         else None,
         file_type=request.file_type,
+        # Step-17: forward the hybrid knobs so /api/answer can opt
+        # into keyword / hybrid retrieval without changing the prompt
+        # or LLM call. Defaults preserve the Step-16 vector-only flow.
+        search_mode=request.search_mode,
+        vector_weight=request.vector_weight,
+        keyword_weight=request.keyword_weight,
     )
     return search_service.run_search_with_chunk_texts(settings, search_request)
 
@@ -476,6 +488,14 @@ def _build_citations(
             AnswerCitation(
                 rank=i,
                 score=r.score,
+                # Step-17 score breakdown carried through verbatim
+                # from the search result so /api/answer callers can
+                # see which signal drove each citation up the ranking.
+                final_score=r.final_score,
+                vector_score=r.vector_score,
+                keyword_score=r.keyword_score,
+                match_reasons=list(r.match_reasons),
+                search_mode=r.search_mode,
                 data_source_id=r.data_source_id,
                 data_source_name=r.data_source_name,
                 source_type=r.source_type,

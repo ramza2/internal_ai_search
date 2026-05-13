@@ -156,7 +156,69 @@ def _truncate_suffix(normalized: str, max_len: int) -> str:
     return normalized[:cut] + _ELLIPSIS
 
 
+def build_snippet_with_tokens(
+    chunk_text: str | None,
+    query: str | None,
+    tokens: list[str] | None,
+    *,
+    max_len: int = SNIPPET_MAX_LEN,
+) -> str:
+    """Snippet builder that also considers a list of keyword tokens.
+
+    Step-17 keyword / hybrid mode needs better snippet placement when
+    the full ``query`` phrase isn't in the chunk but one of its
+    whitespace-split tokens is. Algorithm:
+
+    1. Try the full ``query`` phrase first (delegates to
+       :func:`build_snippet`). If it matches, we're done.
+    2. Otherwise scan ``tokens`` (longest first so a multi-word
+       partial wins over a stop-word) and reuse the same window logic
+       around the earliest occurrence.
+    3. Fall back to the head-truncation path when nothing matches.
+
+    The function never returns more than ``max_len`` characters and
+    never exposes the full ``chunk_text``.
+    """
+    if not chunk_text or max_len <= 0:
+        return ""
+
+    # Fast path: the whole-phrase logic handles short texts and full
+    # matches already (centered window + ellipses).
+    base = build_snippet(chunk_text, query, max_len=max_len)
+    if base and (not query or _find_first_match(_normalize_whitespace(chunk_text), (query or "").strip()) >= 0):
+        return base
+
+    # No full-phrase match — try tokens.
+    normalized = _normalize_whitespace(str(chunk_text))
+    if not normalized or len(normalized) <= max_len:
+        return normalized
+
+    # Pick the earliest match across all tokens (longest first so
+    # multi-character tokens take precedence over single-char ones).
+    earliest_token: str | None = None
+    earliest_idx = -1
+    if tokens:
+        for tok in sorted(
+            (t for t in tokens if t and len(t.strip()) > 0),
+            key=lambda t: -len(t),
+        ):
+            idx = _find_first_match(normalized, tok)
+            if idx < 0:
+                continue
+            if earliest_idx < 0 or idx < earliest_idx:
+                earliest_token = tok
+                earliest_idx = idx
+
+    if earliest_token is None:
+        return _truncate_suffix(normalized, max_len)
+
+    # Re-use the centered-window path by recursing on the matching
+    # token as the synthetic "query".
+    return build_snippet(chunk_text, earliest_token, max_len=max_len)
+
+
 __all__ = [
     "SNIPPET_MAX_LEN",
     "build_snippet",
+    "build_snippet_with_tokens",
 ]

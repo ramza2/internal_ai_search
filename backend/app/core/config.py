@@ -6,7 +6,13 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "gemma3"
+    # Timeout used by the /api/tags health probe. Must stay short so
+    # ``GET /health/llm`` fails fast when Ollama is down.
     ollama_timeout_seconds: float = 10.0
+    # Timeout for /api/generate (RAG answer endpoint). Generation runs
+    # on CPU in many dev setups and can legitimately take 30–60s for
+    # gemma3, so this is decoupled from the health-probe timeout.
+    ollama_generate_timeout_seconds: float = 60.0
 
     embedding_provider: str = "ollama"
     embedding_model: str = "bge-m3"
@@ -23,6 +29,19 @@ class Settings(BaseSettings):
     data_source_secret_key: str = "change-this-secret-key-in-production"
 
     webdav_timeout_seconds: float = 15.0
+
+    # --- Step 19: JWT + initial admin bootstrap -------------------------
+    jwt_secret_key: str = "change-this-jwt-secret-key-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 720
+
+    initial_admin_login_id: str = "admin"
+    initial_admin_password: str = ""
+    initial_admin_name: str = "Initial Admin"
+    initial_admin_email: str = "admin@example.com"
+    initial_admin_department: str = "System"
+
+    password_min_length: int = 8
 
     model_config = SettingsConfigDict(
         env_file=".env",
