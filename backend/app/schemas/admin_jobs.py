@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class AdminJobItem(BaseModel):
@@ -87,6 +87,47 @@ class AdminJobErrorResponse(BaseModel):
     error: str | None = None
 
 
+class AdminTestEnqueueRequest(BaseModel):
+    """Dev-only body for ``POST /api/admin/jobs/test-enqueue``."""
+
+    data_source_id: UUID | None = None
+    job_type: str = "WEBDAV_SYNC_TREE"
+    fail_test: bool = False
+    priority: int = 0
+
+
+class AdminTestEnqueueResponse(BaseModel):
+    status: str = "ok"
+    job_id: UUID
+    message: str = "Test job queued successfully"
+
+
+class AdminSyncTreeJobRequest(BaseModel):
+    """Body for ``POST /api/admin/jobs/sync-tree`` (queue PENDING worker job)."""
+
+    data_source_id: UUID
+    start_path: str = "/"
+    max_depth: int = Field(default=3, ge=0, le=20)
+    max_items: int = Field(default=5000, ge=1, le=50_000)
+    include_hidden: bool = False
+    apply_exclusions: bool = True
+    detect_deleted: bool = False
+    priority: int = 0
+
+    @field_validator("start_path", mode="before")
+    @classmethod
+    def normalize_start_path(cls, v: Any) -> str:
+        s = str(v or "").strip()
+        return s if s else "/"
+
+
+class AdminSyncTreeJobResponse(BaseModel):
+    status: str = "ok"
+    job_id: UUID
+    job_type: str = "WEBDAV_SYNC_TREE"
+    message: str = "Sync-tree job queued successfully"
+
+
 __all__ = [
     "AdminJobDetailResponse",
     "AdminJobErrorResponse",
@@ -94,4 +135,8 @@ __all__ = [
     "AdminJobFailuresResponse",
     "AdminJobItem",
     "AdminJobListResponse",
+    "AdminSyncTreeJobRequest",
+    "AdminSyncTreeJobResponse",
+    "AdminTestEnqueueRequest",
+    "AdminTestEnqueueResponse",
 ]

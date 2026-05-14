@@ -1,0 +1,128 @@
+"""Dispatch ``WorkerJob`` to handlers.
+
+``WEBDAV_SYNC_TREE`` runs the same core logic as the synchronous HTTP route
+when ``job_params.worker_test_mode`` is absent. Other job types remain
+unimplemented unless flagged for tests.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from app.core.config import settings
+from app.services import scan_jobs_service
+from app.services.file_recursive_sync_service import run_webdav_recursive_sync_core
+from app.workers.worker_types import WorkerJob, WorkerRunResult
+
+logger = logging.getLogger(__name__)
+
+_TEST_JOB_TYPES = frozenset(
+    {
+        "MANUAL_SCAN",
+        "WEBDAV_SYNC_ROOT",
+        "WEBDAV_SYNC_TREE",
+        "PROCESS_PENDING_TEXT",
+        "PROCESS_PENDING_DOCUMENTS",
+        "CHUNK_COMPLETED_TEXT",
+        "EMBED_PENDING_CHUNKS",
+    }
+)
+
+
+def _truthy(d: dict[str, Any] | None, key: str) -> bool:
+    if not d:
+        return False
+    v = d.get(key)
+    if v is True:
+        return True
+    if isinstance(v, str) and v.strip().lower() in ("1", "true", "yes"):
+        return True
+    return False
+
+
+def _coerce_int(v: Any, default: int, *, lo: int | None = None, hi: int | None = None) -> int:
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        n = default
+    if lo is not None and n < lo:
+        n = lo
+    if hi is not None and n > hi:
+        n = hi
+    return n
+
+
+def run_job(job: WorkerJob) -> WorkerRunResult:
+    """Execute a claimed job."""
+    params = job.job_params if isinstance(job.job_params, dict) else None
+
+    if job.job_type not in _TEST_JOB_TYPES:
+        return WorkerRunResult(
+            success=False,
+            message=f"Unknown job_type: {job.job_type}",
+        )
+
+    if _truthy(params, "fail_test"):
+        return WorkerRunResult(
+            success=False,
+            message="fail_test requested (skeleton worker)",
+        )
+
+    if _truthy(params, "worker_test_mode"):
+        logger.info("worker_test_mode no-op success job_id=%s type=%s", job.id, job.job_type)
+        return WorkerRunResult(
+            success=True,
+            message="No-op test job completed",
+            processed_files=0,
+            completed_files=0,
+            failed_files=0,
+            skipped_files=0,
+        )
+
+    if job.job_type == "WEBDAV_SYNC_TREE":
+        if job.data_source_id is None:
+            return WorkerRunResult(
+                success=False,
+                message="WEBDAV_SYNC_TREE job is missing data_source_id",
+            )
+        p = params or {}
+        start_path = str(p.get("start_path") if p.get("start_path") is not None else "/").strip() or "/"
+        max_depth = _coerce_int(p.get("max_depth"), 3, lo=0, hi=20)
+        max_items = _coerce_int(p.get("max_items"), 5000, lo=1, hi=50_000)
+        include_hidden = bool(p.get("include_hidden", False))
+        apply_exclusions = bool(p.get("apply_exclusions", True))
+        detect_deleted = bool(p.get("detect_deleted", False))
+        wid = (settings.worker_id or "local-worker-1").strip()[:100]
+
+        out = run_webdav_recursive_sync_core(
+            settings,
+            job.data_source_id,
+            scan_job_id=job.id,
+            start_path=start_path,
+            max_depth=max_depth,
+            max_items=max_items,
+            include_hidden=include_hidden,
+            apply_exclusions=apply_exclusions,
+            detect_deleted=detect_deleted,
+            requested_by=job.requested_by,
+            cancel_check=lambda: scan_jobs_service.is_cancel_requested(job.id),
+            heartbeat_worker_id=wid,
+        )
+        payload = out.payload
+        st = str(payload.get("status") or "").lower()
+        ok = st in ("ok", "partial")
+        msg = str(payload.get("message") or ("Sync finished" if ok else "Sync failed"))
+        return WorkerRunResult(
+            success=ok,
+            message=msg,
+            finalized_by_handler=out.finalized_scan_job,
+        )
+
+    return WorkerRunResult(
+        success=False,
+        message="Worker handler is not implemented for this job type yet",
+    )
+
+
+__all__ = ["run_job"]

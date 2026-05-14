@@ -84,3 +84,36 @@ export type AdminJobFailuresParams = {
   limit?: number;
   offset?: number;
 };
+
+/** POST /api/admin/jobs/test-enqueue (admin-only, dev/verification) */
+export type AdminTestEnqueueBody = {
+  data_source_id: string;
+  job_type?: string;
+  fail_test?: boolean;
+  priority?: number;
+};
+
+export type AdminTestEnqueueResponse = {
+  status: string;
+  job_id: string;
+  message: string;
+};
+
+/** POST /api/admin/jobs/sync-tree */
+export type AdminSyncTreeJobRequest = {
+  data_source_id: string;
+  start_path?: string;
+  max_depth?: number;
+  max_items?: number;
+  include_hidden?: boolean;
+  apply_exclusions?: boolean;
+  detect_deleted?: boolean;
+  priority?: number;
+};
+
+export type AdminSyncTreeJobResponse = {
+  status: string;
+  job_id: string;
+  job_type: string;
+  message: string;
+};

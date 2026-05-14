@@ -21,7 +21,7 @@ Vite + React + TypeScript 기반 웹 UI. 백엔드(FastAPI)와 JWT 인증으로 
 | 공개 | `/login`, `/signup` | 로그인·회원가입 |
 | 인증 후 | `/change-password` | 비밀번호 변경(강제 시 안내) |
 | 사용자 | `/search`, `/answer`, `/files/:fileId/preview` | 통합 검색, AI 질문, 미리보기 |
-| 관리자 | `/admin`, `/admin/data-sources`, `/admin/jobs`, `/admin/file-stats`, `/admin/users`, `/admin/action-logs` | 대시보드, 데이터 소스, **작업 목록(scan_jobs)**, 파일 통계, 사용자, 작업 로그 |
+| 관리자 | `/admin`, `/admin/data-sources`, `/admin/jobs`, `/admin/file-stats`, `/admin/users`, `/admin/action-logs` | 대시보드, 데이터 소스, **작업 목록(scan_jobs)** — 목록에 **개발·검증용** 테스트 Job 생성 패널(접기) 포함, 파일 통계, 사용자, 작업 로그 |
 
 ## 인증·권한 흐름 (유지)
 
@@ -38,6 +38,15 @@ Vite + React + TypeScript 기반 웹 UI. 백엔드(FastAPI)와 JWT 인증으로 
 - **최근 스캔 작업** 테이블의 `job_type`은 `getJobTypeLabel` / `getJobStatusBadgeVariant`(`src/utils/jobLabels.ts`)로 작업 목록과 동일한 한글·배지 규칙을 씁니다.
 - 화면: `PageHeader`(설명 + **새로고침**), `SectionCard` + `StatCard` 그리드, 문제 항목별 **관리 페이지 링크**, `DataTable` 두 개(스캔 작업 / 최근 활동), 하단 **바로 가기** 카드. **차트 라이브러리는 사용하지 않음**(카드·테이블만).
 - 최초 `Loading`, API 실패 시 `ErrorMessage` + 다시 시도, 스캔/활동 테이블은 빈 배열이면 `EmptyState`. 새로고침 중 버튼 비활성화.
+
+## 관리자 작업 목록 (`/admin/jobs`)과 Worker 스켈레톤 검증
+
+- **작업 목록**은 `GET /api/admin/jobs`로 `scan_jobs`를 조회합니다. `PENDING` / `RUNNING` / `COMPLETED` / `FAILED` 등 상태는 배지(`getJobStatusBadgeVariant`)로 표시하고, **`worker_id`**, **`heartbeat_at`**, **`priority`**, **`job_params`**(목록·상세)를 확인할 수 있습니다.
+- **백그라운드 동기화 (WebDAV sync-tree)** 섹션에서 `POST /api/admin/jobs/sync-tree`로 실제 재귀 동기화 작업을 큐에 넣을 수 있습니다. **worker**(`python -m app.worker_main`)를 실행해야 `PENDING` → `RUNNING` → 완료까지 진행됩니다. 동기 API `POST /api/data-sources/…/sync-tree` 및 **PipelineRunModal**의 동기 실행과는 별도 경로입니다.
+- 긴 sync-tree 실행 중 **DB heartbeat**는 백엔드에서 일정 간격으로만 갱신합니다. **진행 중 세부 heartbeat(폴더 단위 등)는 다음 단계에서 보강**할 수 있습니다.
+- 화면 상단 **개발·검증용** 접이 패널에서 **테스트 Job 생성**을 누르면 `POST /api/admin/jobs/test-enqueue`를 호출합니다. **데이터 소스**는 현재 필터에 선택된 값이 있으면 그 UUID를 쓰고, 없으면 목록의 **첫 번째 데이터 소스**를 사용합니다. 둘 다 없으면 오류 메시지를 냅니다. **`fail_test`** 체크 시 의도적으로 실패하는 큐 행이 만들어집니다.
+- 별도 터미널에서 백엔드 디렉터리로 이동한 뒤 **`python -m app.worker_main`**을 실행하면 큐의 **`PENDING`** 작업이 **`RUNNING` → `COMPLETED`(또는 `fail_test` 시 `FAILED`)**로 바뀌는지 확인할 수 있습니다.
+- 이 버튼·엔드포인트는 **개발/검증 전용**이며, 추후 정식 **`POST /api/admin/jobs`** API로 대체·제거될 수 있습니다(코드에 TODO 주석).
 
 ## 설치·실행
 
@@ -82,14 +91,15 @@ npm run preview
 
 ## 작업 목록 (`/admin/jobs`)
 
-- **API:** `src/api/adminJobsApi.ts` — `GET /api/admin/jobs`, `GET /api/admin/jobs/{id}`, `GET /api/admin/jobs/{id}/failures` (`src/types/adminJobs.ts`).
+- **API:** `src/api/adminJobsApi.ts` — `GET /api/admin/jobs`, `GET /api/admin/jobs/{id}`, `GET /api/admin/jobs/{id}/failures`, **`POST /api/admin/jobs/test-enqueue`** (개발·검증용, `src/types/adminJobs.ts`).
 - **job_type 표시:** `src/utils/jobLabels.ts`의 `getJobTypeLabel`로 한글 라벨(예: `MANUAL_SCAN` → 수동 작업, `WEBDAV_SYNC_TREE` → 재귀 동기화). 백엔드에만 있는 코드는 그대로 표시합니다. 상태 배지는 `getJobStatusBadgeVariant`로 대시보드와 공유합니다.
 - **요청자:** 상세 모달에서 `requested_by_name` / `requested_by_login_id`를 표시합니다. 값이 없으면 **알 수 없음**(과거 `MANUAL_SCAN` 행 등).
 - **필터:** `status`, `job_type`, `data_source_id`, `keyword`(소스 이름·`current_file_path`·`error_message` ILIKE), `from_date` / `to_date`, `limit`(20/50/100), `offset`. **조회** 시 적용·offset 리셋, **초기화**로 필터 초기화.
-- **목록:** 작업 유형(한글 + 코드)·상태 배지·소스명·시작/종료·`formatDuration` 소요 시간·진행률(퍼센트 + processed/total)·완료/실패/스킵/삭제 카운트·오류 요약·**상세** 버튼.
+- **목록:** 작업 유형(한글 + 코드)·상태 배지·소스명·**우선순위**·**job_params**(짧은 JSON)·**worker_id**·**heartbeat**·시작/종료·`formatDuration` 소요 시간·진행률(퍼센트 + processed/total)·완료/실패/스킵/삭제 카운트·오류 요약·**상세** 버튼.
 - **상세:** 모달에서 job 메타·카운터·`error_message` 및 **실패 목록** 테이블(`scan_failures`). 실패가 없으면 `EmptyState`.
 - **경고:** `scan_jobs` / `scan_failures` 테이블이 없는 개발 DB에서는 API가 빈 목록과 `warnings`를 주며 UI에 안내합니다.
 - **조회 전용:** 취소·재시도·백그라운드 실행은 worker 도입 후 예정입니다. `action_logs`에 이 화면의 조회를 남기지 않습니다(백엔드 README와 동일 정책).
+- **개발·검증용 테스트 Job:** 상단 접이 패널에서 `POST /api/admin/jobs/test-enqueue` 호출(위 **관리자 작업 목록과 Worker 스켈레톤 검증** 참고). 정식 job 생성 API가 생기면 UI·엔드포인트를 대체할 예정입니다.
 - **과거 데이터:** DB에 남아 있는 오래된 행은 `job_type`이 `MANUAL_SCAN`일 수 있습니다(백엔드가 일괄 백필하지 않음). 실제 실행 단계는 `action_logs`와 시간대를 맞춰 추정해야 합니다.
 - **Worker 준비 필드(마이그레이션 022):** 테이블에 `priority`, `worker_id`, `heartbeat_at`, `pipeline_step`, `retry_count` / `max_retries`, `cancel_requested`, `parent_job_id`, `job_params` 등이 있으면 목록·상세에 표시합니다. **지금은 worker가 없어** 대부분 `null`/기본값이며, worker 도입 후 `heartbeat`·`worker_id`·`cancel_requested`가 의미를 갖습니다. `job_params`는 `<details>` 로 접기/펼치기 JSON(서버에서 비밀 키 제거).
 

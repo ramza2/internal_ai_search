@@ -7,6 +7,7 @@ import { Loading } from "@/components/Loading";
 import {
   Badge,
   Button,
+  CollapsiblePanel,
   DataTable,
   FilterBar,
   FilterField,
@@ -71,6 +72,17 @@ function errSnippet(s: string | null | undefined, max = 80): string {
   return `${t.slice(0, max)}…`;
 }
 
+function jobParamsPreview(params: unknown): string {
+  if (params == null) return "—";
+  try {
+    const s = JSON.stringify(params);
+    if (s.length <= 72) return s;
+    return `${s.slice(0, 69)}...`;
+  } catch {
+    return "—";
+  }
+}
+
 function dashStr(v: string | null | undefined): string {
   if (v == null || v === "") return "—";
   return v;
@@ -94,6 +106,23 @@ export function AdminJobsPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [listBusy, setListBusy] = useState(false);
+
+  const [testJobType, setTestJobType] = useState<string>("WEBDAV_SYNC_TREE");
+  const [testFailTest, setTestFailTest] = useState(false);
+  const [testBusy, setTestBusy] = useState(false);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+
+  const [syncDsId, setSyncDsId] = useState("");
+  const [syncStartPath, setSyncStartPath] = useState("/");
+  const [syncMaxDepth, setSyncMaxDepth] = useState(3);
+  const [syncMaxItems, setSyncMaxItems] = useState(5000);
+  const [syncIncludeHidden, setSyncIncludeHidden] = useState(false);
+  const [syncApplyExclusions, setSyncApplyExclusions] = useState(true);
+  const [syncDetectDeleted, setSyncDetectDeleted] = useState(false);
+  const [syncPriority, setSyncPriority] = useState(0);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [syncJobId, setSyncJobId] = useState<string | null>(null);
 
   const [modalJobId, setModalJobId] = useState<string | null>(null);
   const [detail, setDetail] = useState<AdminJobDetailResponse | null>(null);
@@ -136,6 +165,66 @@ export function AdminJobsPage() {
   useEffect(() => {
     void fetchList();
   }, [fetchList]);
+
+  useEffect(() => {
+    const sid = applied.dataSourceId.trim();
+    if (sid) setSyncDsId(sid);
+  }, [applied.dataSourceId]);
+
+  async function onTestEnqueue() {
+    const dsId = applied.dataSourceId.trim() || (dataSources[0]?.id ?? "");
+    if (!dsId) {
+      setTestMsg("데이터 소스가 없습니다. 필터에서 소스를 선택하거나 데이터 소스를 먼저 등록하세요.");
+      return;
+    }
+    setTestBusy(true);
+    setTestMsg(null);
+    try {
+      const res = await adminJobsApi.postAdminTestEnqueue({
+        data_source_id: dsId,
+        job_type: testJobType,
+        fail_test: testFailTest,
+        priority: 0,
+      });
+      setTestMsg(res.message ?? "Test job queued successfully");
+      await fetchList();
+    } catch (e) {
+      setTestMsg(getApiErrorMessage(e));
+    } finally {
+      setTestBusy(false);
+    }
+  }
+
+  async function onEnqueueSyncTree() {
+    const dsId = syncDsId.trim() || applied.dataSourceId.trim() || dataSources[0]?.id || "";
+    if (!dsId) {
+      setSyncMsg("데이터 소스를 선택하세요. (필터의 소스 또는 아래 선택 목록)");
+      setSyncJobId(null);
+      return;
+    }
+    setSyncBusy(true);
+    setSyncMsg(null);
+    setSyncJobId(null);
+    try {
+      const res = await adminJobsApi.postAdminSyncTreeJob({
+        data_source_id: dsId,
+        start_path: syncStartPath.trim() || "/",
+        max_depth: Math.min(20, Math.max(0, Number(syncMaxDepth) || 3)),
+        max_items: Math.min(50_000, Math.max(1, Number(syncMaxItems) || 5000)),
+        include_hidden: syncIncludeHidden,
+        apply_exclusions: syncApplyExclusions,
+        detect_deleted: syncDetectDeleted,
+        priority: Number.isFinite(syncPriority) ? syncPriority : 0,
+      });
+      setSyncJobId(res.job_id);
+      setSyncMsg(`${res.message} · job_id: ${res.job_id}. worker를 실행해야 PENDING 작업이 처리됩니다.`);
+      await fetchList();
+    } catch (e) {
+      setSyncMsg(getApiErrorMessage(e));
+    } finally {
+      setSyncBusy(false);
+    }
+  }
 
   function onSearch() {
     setApplied({ ...draft });
@@ -307,6 +396,184 @@ export function AdminJobsPage() {
         <PaginationBar offset={offset} limit={limit} total={total} onOffsetChange={setOffset} disabled={listBusy} />
       </SectionCard>
 
+      <SectionCard title="백그라운드 동기화 (WebDAV sync-tree)">
+        <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
+          <code>POST /api/admin/jobs/sync-tree</code>로 <strong>WEBDAV_SYNC_TREE</strong> 작업을 큐에 넣습니다. 동기 API{" "}
+          <code>POST /api/data-sources/…/sync-tree</code>와 별개이며, <strong>worker</strong>(<code>python -m app.worker_main</code>)를
+          실행해야 처리됩니다. PipelineRunModal의 동기 실행은 변경되지 않았습니다.
+        </p>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))",
+            gap: "0.75rem",
+            alignItems: "end",
+            marginTop: "0.5rem",
+          }}
+        >
+          <FilterField label="data_source_id">
+            <Select
+              value={syncDsId}
+              onChange={(e) => setSyncDsId(e.target.value)}
+              disabled={syncBusy || listBusy}
+            >
+              <option value="">선택…</option>
+              {dataSources.map((ds) => (
+                <option key={ds.id} value={ds.id}>
+                  {ds.name}
+                  {!ds.is_active ? " (비활성)" : ""}
+                </option>
+              ))}
+            </Select>
+          </FilterField>
+          <FilterField label="start_path">
+            <Input
+              value={syncStartPath}
+              onChange={(e) => setSyncStartPath(e.target.value)}
+              placeholder="/"
+              disabled={syncBusy || listBusy}
+            />
+          </FilterField>
+          <FilterField label="max_depth">
+            <Input
+              type="number"
+              min={0}
+              max={20}
+              value={String(syncMaxDepth)}
+              onChange={(e) => setSyncMaxDepth(Number(e.target.value))}
+              disabled={syncBusy || listBusy}
+            />
+          </FilterField>
+          <FilterField label="max_items">
+            <Input
+              type="number"
+              min={1}
+              max={50000}
+              value={String(syncMaxItems)}
+              onChange={(e) => setSyncMaxItems(Number(e.target.value))}
+              disabled={syncBusy || listBusy}
+            />
+          </FilterField>
+          <FilterField label="priority">
+            <Input
+              type="number"
+              value={String(syncPriority)}
+              onChange={(e) => setSyncPriority(Number(e.target.value))}
+              disabled={syncBusy || listBusy}
+            />
+          </FilterField>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem", marginTop: "0.65rem", fontSize: "0.875rem" }}>
+          <label style={{ display: "inline-flex", gap: "0.35rem", alignItems: "center", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={syncIncludeHidden}
+              onChange={(e) => setSyncIncludeHidden(e.target.checked)}
+              disabled={syncBusy || listBusy}
+            />
+            include_hidden
+          </label>
+          <label style={{ display: "inline-flex", gap: "0.35rem", alignItems: "center", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={syncApplyExclusions}
+              onChange={(e) => setSyncApplyExclusions(e.target.checked)}
+              disabled={syncBusy || listBusy}
+            />
+            apply_exclusions
+          </label>
+          <label style={{ display: "inline-flex", gap: "0.35rem", alignItems: "center", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={syncDetectDeleted}
+              onChange={(e) => setSyncDetectDeleted(e.target.checked)}
+              disabled={syncBusy || listBusy}
+            />
+            detect_deleted
+          </label>
+        </div>
+        <div style={{ marginTop: "0.75rem" }}>
+          <Button type="button" variant="primary" size="sm" onClick={() => void onEnqueueSyncTree()} disabled={syncBusy || listBusy}>
+            Sync-tree Job 생성
+          </Button>
+        </div>
+        {syncJobId != null && syncJobId !== "" && (
+          <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
+            마지막 생성 job_id: <code>{syncJobId}</code>
+          </p>
+        )}
+        {syncMsg != null && syncMsg !== "" && (
+          <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
+            {syncMsg}
+          </p>
+        )}
+      </SectionCard>
+
+      <CollapsiblePanel
+        title="개발·검증용 (Worker 스켈레톤)"
+        summary="PENDING 테스트 Job을 넣고 별도 터미널에서 백엔드 python -m app.worker_main 실행 후 목록을 새로고침해 RUNNING → COMPLETED 전이를 확인합니다."
+        defaultOpen={false}
+      >
+        <p className="muted" style={{ marginTop: 0, fontSize: "0.8rem" }}>
+          {/* TODO: 정식 POST /api/admin/jobs 도입 시 이 패널·test-enqueue 호출 제거·대체 예정 */}
+          POST /api/admin/jobs/test-enqueue — 관리자 전용. action_logs 미기록(백엔드 README 참고).
+        </p>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "0.75rem",
+            alignItems: "flex-end",
+            marginTop: "0.5rem",
+          }}
+        >
+          <FilterField label="job_type">
+            <Select
+              value={testJobType}
+              onChange={(e) => setTestJobType(e.target.value)}
+              disabled={testBusy || listBusy}
+            >
+              {JOB_TYPE_FILTER_CODES.map((code) => (
+                <option key={code} value={code}>
+                  {getJobTypeLabel(code)} ({code})
+                </option>
+              ))}
+            </Select>
+          </FilterField>
+          <label
+            style={{
+              display: "inline-flex",
+              gap: "0.35rem",
+              alignItems: "center",
+              fontSize: "0.875rem",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={testFailTest}
+              onChange={(e) => setTestFailTest(e.target.checked)}
+              disabled={testBusy || listBusy}
+            />
+            fail_test
+          </label>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => void onTestEnqueue()}
+            disabled={testBusy || listBusy}
+          >
+            테스트 Job 생성
+          </Button>
+        </div>
+        {testMsg != null && testMsg !== "" && (
+          <p className="muted" style={{ marginTop: "0.65rem", fontSize: "0.85rem" }}>
+            {testMsg}
+          </p>
+        )}
+      </CollapsiblePanel>
+
       <SectionCard title="작업 이력">
         {items.length === 0 && !listBusy ? (
           <EmptyState title="작업이 없습니다" description="필터를 바꾸거나 기간을 넓혀 보세요." />
@@ -319,6 +586,7 @@ export function AdminJobsPage() {
                   <th>status</th>
                   <th>소스</th>
                   <th>우선순위</th>
+                  <th>job_params</th>
                   <th>파이프라인</th>
                   <th>worker</th>
                   <th>heartbeat</th>
@@ -346,6 +614,13 @@ export function AdminJobsPage() {
                     </td>
                     <td>{j.data_source_name ?? "—"}</td>
                     <td style={{ fontSize: "0.85rem" }}>{dashNum(j.priority)}</td>
+                    <td
+                      className="snippet"
+                      style={{ fontSize: "0.7rem", maxWidth: "10rem" }}
+                      title={j.job_params != null ? JSON.stringify(j.job_params) : undefined}
+                    >
+                      {jobParamsPreview(j.job_params)}
+                    </td>
                     <td className="snippet" style={{ fontSize: "0.8rem", maxWidth: "7rem" }}>
                       {dashStr(j.pipeline_step)}
                     </td>

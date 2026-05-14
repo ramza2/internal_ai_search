@@ -43,6 +43,14 @@ class Settings(BaseSettings):
 
     password_min_length: int = 8
 
+    # --- DB polling worker (skeleton; separate process) -----------------
+    worker_enabled: bool = False
+    worker_id: str = "local-worker-1"
+    worker_poll_interval_seconds: float = 5.0
+    worker_heartbeat_interval_seconds: float = 10.0
+    worker_stale_timeout_minutes: int = 30
+    worker_max_jobs_per_loop: int = 1
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

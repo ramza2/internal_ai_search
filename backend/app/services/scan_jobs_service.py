@@ -8,16 +8,21 @@ Granular ``job_type`` values require migration ``021_scan_job_type_values.sql``
 on the database; otherwise ``create_scan_job`` may return ``None`` while the
 caller continues.
 
-Worker-oriented helpers (``enqueue_scan_job``, ``update_scan_job_progress``,
-``is_cancel_requested``) require migration ``022_scan_jobs_worker_fields.sql``.
-Until then they no-op or return ``None`` / ``False``. **Do not** store
-credentials, tokens, file bodies, or LLM prompts in ``job_params``.
+Worker-oriented helpers (``enqueue_scan_job``, ``dequeue_pending_job``,
+``update_scan_job_progress``, ``is_cancel_requested``, terminal ``mark_job_*``,
+``update_job_heartbeat``) require migration ``022_scan_jobs_worker_fields.sql``
+and a compatible ``scan_jobs`` table. On DDL errors they no-op or return
+``None`` / ``False``. **Do not** store credentials, tokens, file bodies, or
+LLM prompts in ``job_params``.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from app.workers.worker_types import WorkerJob
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
@@ -109,7 +114,7 @@ _JOB_INSERT_EXTRA_COLS = """
 
 def enqueue_scan_job(
     *,
-    ds_id: UUID,
+    ds_id: UUID | None = None,
     job_type: str,
     requested_by: UUID | None = None,
     job_params: dict[str, Any] | None = None,
@@ -275,6 +280,182 @@ def is_cancel_requested(job_id: UUID) -> bool:
     except Exception:
         return False
 
+
+def _truncate_error_message(msg: str | None, *, max_len: int = 4000) -> str | None:
+    if msg is None:
+        return None
+    s = str(msg).strip()
+    if not s:
+        return None
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 3] + "..."
+
+
+def dequeue_pending_job(
+    *,
+    worker_id: str,
+    max_retries_default: int = 1,
+) -> WorkerJob | None:
+    """Claim one ``PENDING`` row (``FOR UPDATE SKIP LOCKED``) and mark ``RUNNING``.
+
+    ``max_retries_default`` is reserved for future retry policy; it does not
+    mutate the row in this skeleton.
+
+    Returns ``None`` when no job is available or on any DB/DDL error.
+    """
+    _ = max_retries_default  # reserved for future default max_retries coercion
+    from app.workers.worker_types import WorkerJob
+
+    wid = (worker_id or "").strip()[:100]
+    if not wid:
+        return None
+
+    sql = """
+        WITH picked AS (
+            SELECT id
+            FROM scan_jobs
+            WHERE status = 'PENDING'::scan_job_status
+            ORDER BY priority DESC, created_at ASC NULLS LAST
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+        )
+        UPDATE scan_jobs sj
+        SET
+            status = 'RUNNING'::scan_job_status,
+            started_at = COALESCE(sj.started_at, NOW()),
+            worker_id = %(wid)s,
+            heartbeat_at = NOW(),
+            updated_at = NOW()
+        FROM picked
+        WHERE sj.id = picked.id
+        RETURNING
+            sj.id,
+            sj.data_source_id,
+            sj.job_type::text AS job_type,
+            sj.job_params,
+            sj.requested_by,
+            sj.priority,
+            sj.pipeline_step,
+            sj.parent_job_id,
+            sj.max_retries,
+            sj.retry_count,
+            sj.cancel_requested
+    """
+    try:
+        with get_db_connection() as conn:
+            conn.row_factory = dict_row
+            with conn.cursor() as cur:
+                cur.execute(sql, {"wid": wid})
+                row = cur.fetchone()
+            conn.commit()
+        if not row:
+            return None
+        params = row.get("job_params")
+        if params is not None and not isinstance(params, dict):
+            params = None
+        return WorkerJob(
+            id=row["id"],
+            data_source_id=row.get("data_source_id"),
+            job_type=str(row.get("job_type") or "").strip().upper(),
+            job_params=params,
+            requested_by=row.get("requested_by"),
+            priority=int(row.get("priority") or 0),
+            pipeline_step=row.get("pipeline_step"),
+            parent_job_id=row.get("parent_job_id"),
+            max_retries=int(row.get("max_retries") or 1),
+            retry_count=int(row.get("retry_count") or 0),
+            cancel_requested=bool(row.get("cancel_requested")),
+        )
+    except Exception:
+        return None
+
+
+def mark_job_completed(job_id: UUID, message: str | None = None) -> None:
+    """Worker path: ``COMPLETED`` with timestamps and optional short ``error_message``."""
+    err_clean = _truncate_error_message(message)
+    stmt = """
+        UPDATE scan_jobs
+        SET status = 'COMPLETED'::scan_job_status,
+            finished_at = NOW(),
+            heartbeat_at = NOW(),
+            updated_at = NOW(),
+            current_file_path = NULL,
+            error_message = %s
+        WHERE id = %s
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(stmt, (err_clean, job_id))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def mark_job_failed(job_id: UUID, error_message: str) -> None:
+    """Worker path: ``FAILED`` with sanitized ``error_message`` and heartbeat."""
+    msg = _truncate_error_message(error_message) or "Failed"
+    stmt = """
+        UPDATE scan_jobs
+        SET status = 'FAILED'::scan_job_status,
+            finished_at = NOW(),
+            heartbeat_at = NOW(),
+            updated_at = NOW(),
+            error_message = %s
+        WHERE id = %s
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(stmt, (msg, job_id))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def mark_job_cancelled(job_id: UUID, message: str | None = None) -> None:
+    """Mark ``CANCELLED`` (worker-side cancel flow; no cancel API in this milestone)."""
+    raw = (message or "").strip() or "Job cancelled"
+    err_clean = _truncate_error_message(raw) or "Job cancelled"
+    stmt = """
+        UPDATE scan_jobs
+        SET status = 'CANCELLED'::scan_job_status,
+            finished_at = NOW(),
+            updated_at = NOW(),
+            error_message = %s
+        WHERE id = %s
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(stmt, (err_clean, job_id))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def update_job_heartbeat(job_id: UUID, worker_id: str) -> None:
+    """Best-effort heartbeat for ``RUNNING`` rows only."""
+    wid = (worker_id or "").strip()[:100]
+    if not wid:
+        return
+    stmt = """
+        UPDATE scan_jobs
+        SET heartbeat_at = NOW(),
+            updated_at = NOW(),
+            worker_id = %s
+        WHERE id = %s AND status = 'RUNNING'::scan_job_status
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(stmt, (wid, job_id))
+            conn.commit()
+    except Exception:
+        pass
+
+
 # Labels align with ``action_logs.action_type`` for the same operations.
 JOB_TYPE_MANUAL_SCAN = "MANUAL_SCAN"
 JOB_TYPE_WEBDAV_SYNC_ROOT = "WEBDAV_SYNC_ROOT"
@@ -295,6 +476,8 @@ _KNOWN_JOB_TYPES: frozenset[str] = frozenset(
         JOB_TYPE_EMBED_PENDING_CHUNKS,
     }
 )
+
+KNOWN_JOB_TYPES: frozenset[str] = _KNOWN_JOB_TYPES
 
 
 def create_scan_job(
@@ -422,12 +605,18 @@ __all__ = [
     "JOB_TYPE_PROCESS_PENDING_TEXT",
     "JOB_TYPE_WEBDAV_SYNC_ROOT",
     "JOB_TYPE_WEBDAV_SYNC_TREE",
+    "KNOWN_JOB_TYPES",
     "complete_scan_job",
     "create_scan_job",
+    "dequeue_pending_job",
     "enqueue_scan_job",
     "fail_scan_job",
     "is_cancel_requested",
+    "mark_job_cancelled",
+    "mark_job_completed",
+    "mark_job_failed",
     "sanitize_job_params_for_response",
     "sanitize_job_params_for_storage",
+    "update_job_heartbeat",
     "update_scan_job_progress",
 ]
