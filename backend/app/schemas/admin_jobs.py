@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class AdminJobItem(BaseModel):
@@ -187,6 +187,40 @@ class AdminProcessPendingDocumentsJobResponse(BaseModel):
     message: str = "Process-pending-documents job queued successfully"
 
 
+class AdminChunkCompletedTextJobRequest(BaseModel):
+    """Body for ``POST /api/admin/jobs/chunk-completed-text`` (worker queue)."""
+
+    data_source_id: UUID
+    limit: int = Field(default=100, ge=1, le=5000)
+    chunk_size: int = Field(default=1200, ge=200, le=10_000)
+    chunk_overlap: int = Field(default=200, ge=0, le=9999)
+    min_chunk_size: int = Field(default=100, ge=1, le=10_000)
+    reprocess: bool = False
+    include_extensions: str | None = Field(default=None, max_length=2000)
+    priority: int = 0
+
+    @field_validator("include_extensions", mode="before")
+    @classmethod
+    def normalize_include_extensions_chunk(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s or None
+
+    @model_validator(mode="after")
+    def overlap_smaller_than_chunk(self) -> AdminChunkCompletedTextJobRequest:
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("chunk_overlap must be smaller than chunk_size")
+        return self
+
+
+class AdminChunkCompletedTextJobResponse(BaseModel):
+    status: str = "ok"
+    job_id: UUID
+    job_type: str = "CHUNK_COMPLETED_TEXT"
+    message: str = "Chunk-completed-text job queued successfully"
+
+
 class AdminJobCancelRequest(BaseModel):
     """Optional body for ``POST /api/admin/jobs/{job_id}/cancel``."""
 
@@ -214,6 +248,8 @@ __all__ = [
     "AdminProcessPendingDocumentsJobRequest",
     "AdminProcessPendingDocumentsJobResponse",
     "PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS",
+    "AdminChunkCompletedTextJobRequest",
+    "AdminChunkCompletedTextJobResponse",
     "AdminSyncTreeJobRequest",
     "AdminSyncTreeJobResponse",
     "AdminTestEnqueueRequest",

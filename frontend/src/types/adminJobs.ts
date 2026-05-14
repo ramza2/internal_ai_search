@@ -151,6 +151,25 @@ export type AdminProcessPendingDocumentsJobResponse = {
   message: string;
 };
 
+/** POST /api/admin/jobs/chunk-completed-text (worker queue, no dry_run) */
+export type AdminChunkCompletedTextJobRequest = {
+  data_source_id: string;
+  limit?: number;
+  chunk_size?: number;
+  chunk_overlap?: number;
+  min_chunk_size?: number;
+  reprocess?: boolean;
+  include_extensions?: string | null;
+  priority?: number;
+};
+
+export type AdminChunkCompletedTextJobResponse = {
+  status: string;
+  job_id: string;
+  job_type: string;
+  message: string;
+};
+
 /** POST /api/admin/jobs/{job_id}/cancel */
 export type AdminJobCancelRequest = {
   reason?: string | null;

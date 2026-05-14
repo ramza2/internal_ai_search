@@ -163,6 +163,18 @@ export function AdminJobsPage() {
   const [docMsg, setDocMsg] = useState<string | null>(null);
   const [docJobId, setDocJobId] = useState<string | null>(null);
 
+  const [chunkDsId, setChunkDsId] = useState("");
+  const [chunkLimit, setChunkLimit] = useState(100);
+  const [chunkSize, setChunkSize] = useState(1200);
+  const [chunkOverlap, setChunkOverlap] = useState(200);
+  const [chunkMinSize, setChunkMinSize] = useState(100);
+  const [chunkIncludeExt, setChunkIncludeExt] = useState("");
+  const [chunkReprocess, setChunkReprocess] = useState(false);
+  const [chunkPriority, setChunkPriority] = useState(0);
+  const [chunkBusy, setChunkBusy] = useState(false);
+  const [chunkMsg, setChunkMsg] = useState<string | null>(null);
+  const [chunkJobId, setChunkJobId] = useState<string | null>(null);
+
   const [modalJobId, setModalJobId] = useState<string | null>(null);
   const [detail, setDetail] = useState<AdminJobDetailResponse | null>(null);
   const [detailErr, setDetailErr] = useState("");
@@ -222,6 +234,11 @@ export function AdminJobsPage() {
   useEffect(() => {
     const sid = applied.dataSourceId.trim();
     if (sid) setDocDsId(sid);
+  }, [applied.dataSourceId]);
+
+  useEffect(() => {
+    const sid = applied.dataSourceId.trim();
+    if (sid) setChunkDsId(sid);
   }, [applied.dataSourceId]);
 
   async function onTestEnqueue() {
@@ -345,6 +362,51 @@ export function AdminJobsPage() {
       setDocMsg(getApiErrorMessage(e));
     } finally {
       setDocBusy(false);
+    }
+  }
+
+  async function onEnqueueChunkCompletedText() {
+    const dsId = chunkDsId.trim() || applied.dataSourceId.trim() || dataSources[0]?.id || "";
+    if (!dsId) {
+      setChunkMsg("데이터 소스를 선택하세요. (필터의 소스 또는 아래 선택 목록)");
+      setChunkJobId(null);
+      return;
+    }
+    const lim = Math.min(5000, Math.max(1, Number(chunkLimit) || 100));
+    const cs = Math.min(10_000, Math.max(200, Number(chunkSize) || 1200));
+    const co = Math.min(9999, Math.max(0, Number(chunkOverlap) || 0));
+    if (co >= cs) {
+      setChunkMsg("chunk_overlap은 chunk_size보다 작아야 합니다.");
+      setChunkJobId(null);
+      return;
+    }
+    const ms = Math.min(10_000, Math.max(1, Number(chunkMinSize) || 100));
+    setChunkBusy(true);
+    setChunkMsg(null);
+    setChunkJobId(null);
+    try {
+      const extTrim = chunkIncludeExt.trim();
+      const res = await adminJobsApi.postAdminChunkCompletedTextJob({
+        data_source_id: dsId,
+        limit: lim,
+        chunk_size: cs,
+        chunk_overlap: co,
+        min_chunk_size: ms,
+        reprocess: chunkReprocess,
+        include_extensions: extTrim.length > 0 ? extTrim : undefined,
+        priority: Number.isFinite(chunkPriority) ? chunkPriority : 0,
+      });
+      setChunkJobId(res.job_id);
+      setChunkMsg(
+        `${res.message} · job_id: ${res.job_id}.\n` +
+          "worker를 실행해야 PENDING 작업이 처리됩니다.\n" +
+          "처리 후 검색/RAG 반영을 위해 Embedding 생성이 필요합니다."
+      );
+      await fetchList();
+    } catch (e) {
+      setChunkMsg(getApiErrorMessage(e));
+    } finally {
+      setChunkBusy(false);
     }
   }
 
@@ -872,6 +934,134 @@ export function AdminJobsPage() {
         {docMsg != null && docMsg !== "" && (
           <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
             {docMsg}
+          </p>
+        )}
+      </SectionCard>
+
+      <SectionCard title="백그라운드 Chunk 생성">
+        <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
+          <code>POST /api/admin/jobs/chunk-completed-text</code>로 <strong>CHUNK_COMPLETED_TEXT</strong> 작업을 큐에 넣습니다. 동기 API{" "}
+          <code>POST /api/data-sources/…/chunk-completed-text</code>(dry_run 포함) 및 PipelineRunModal과 별개입니다.{" "}
+          <strong>worker</strong>(<code>python -m app.worker_main</code>)를 실행해야 처리됩니다.
+        </p>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))",
+            gap: "0.75rem",
+            alignItems: "end",
+            marginTop: "0.5rem",
+          }}
+        >
+          <FilterField label="data_source_id">
+            <Select
+              value={chunkDsId}
+              onChange={(e) => setChunkDsId(e.target.value)}
+              disabled={chunkBusy || listBusy}
+            >
+              <option value="">선택…</option>
+              {dataSources.map((ds) => (
+                <option key={ds.id} value={ds.id}>
+                  {ds.name}
+                  {!ds.is_active ? " (비활성)" : ""}
+                </option>
+              ))}
+            </Select>
+          </FilterField>
+          <FilterField label="limit">
+            <Input
+              type="number"
+              min={1}
+              max={5000}
+              value={String(chunkLimit)}
+              onChange={(e) => setChunkLimit(Number(e.target.value))}
+              disabled={chunkBusy || listBusy}
+            />
+          </FilterField>
+          <FilterField label="chunk_size">
+            <Input
+              type="number"
+              min={200}
+              max={10000}
+              value={String(chunkSize)}
+              onChange={(e) => setChunkSize(Number(e.target.value))}
+              disabled={chunkBusy || listBusy}
+            />
+          </FilterField>
+          <FilterField label="chunk_overlap">
+            <Input
+              type="number"
+              min={0}
+              max={9999}
+              value={String(chunkOverlap)}
+              onChange={(e) => setChunkOverlap(Number(e.target.value))}
+              disabled={chunkBusy || listBusy}
+            />
+          </FilterField>
+          <FilterField label="min_chunk_size">
+            <Input
+              type="number"
+              min={1}
+              max={10000}
+              value={String(chunkMinSize)}
+              onChange={(e) => setChunkMinSize(Number(e.target.value))}
+              disabled={chunkBusy || listBusy}
+            />
+          </FilterField>
+          <FilterField label="priority">
+            <Input
+              type="number"
+              value={String(chunkPriority)}
+              onChange={(e) => setChunkPriority(Number(e.target.value))}
+              disabled={chunkBusy || listBusy}
+            />
+          </FilterField>
+        </div>
+        <FilterField label="include_extensions (선택)" wide>
+          <Input
+            value={chunkIncludeExt}
+            onChange={(e) => setChunkIncludeExt(e.target.value)}
+            placeholder="예: txt,md,pdf,docx,hwpx — 비우면 서버 기본(필터 없음)"
+            disabled={chunkBusy || listBusy}
+          />
+        </FilterField>
+        <label
+          style={{
+            display: "inline-flex",
+            gap: "0.35rem",
+            alignItems: "center",
+            fontSize: "0.875rem",
+            cursor: "pointer",
+            marginTop: "0.35rem",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={chunkReprocess}
+            onChange={(e) => setChunkReprocess(e.target.checked)}
+            disabled={chunkBusy || listBusy}
+          />
+          기존 Chunk를 재생성합니다 (reprocess). 취소는 파일 단위 안전 지점에서만 적용됩니다.
+        </label>
+        <div style={{ marginTop: "0.75rem" }}>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={() => void onEnqueueChunkCompletedText()}
+            disabled={chunkBusy || listBusy}
+          >
+            Chunk 생성 Job 생성
+          </Button>
+        </div>
+        {chunkJobId != null && chunkJobId !== "" && (
+          <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
+            마지막 생성 job_id: <code>{chunkJobId}</code>
+          </p>
+        )}
+        {chunkMsg != null && chunkMsg !== "" && (
+          <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
+            {chunkMsg}
           </p>
         )}
       </SectionCard>

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -10,6 +10,8 @@ from fastapi.responses import JSONResponse
 
 from app.core.auth_dependencies import CurrentUserContext, require_admin_user
 from app.schemas.admin_jobs import (
+    AdminChunkCompletedTextJobRequest,
+    AdminChunkCompletedTextJobResponse,
     AdminJobCancelResponse,
     AdminProcessPendingDocumentsJobRequest,
     AdminProcessPendingDocumentsJobResponse,
@@ -253,6 +255,62 @@ def admin_enqueue_process_pending_documents_job(
             },
         )
     payload = AdminProcessPendingDocumentsJobResponse(job_id=jid)
+    return JSONResponse(status_code=200, content=payload.model_dump(mode="json"))
+
+
+@router.post("/jobs/chunk-completed-text", response_model=None)
+def admin_enqueue_chunk_completed_text_job(
+    request: Request,
+    body: AdminChunkCompletedTextJobRequest,
+    ctx: CurrentUserContext = Depends(require_admin_user),
+) -> JSONResponse:
+    """Queue a **PENDING** ``CHUNK_COMPLETED_TEXT`` job for the DB polling worker."""
+    job_params: dict[str, Any] = {
+        "limit": int(body.limit),
+        "chunk_size": int(body.chunk_size),
+        "chunk_overlap": int(body.chunk_overlap),
+        "min_chunk_size": int(body.min_chunk_size),
+        "reprocess": bool(body.reprocess),
+        "created_for": "chunk_completed_text_worker",
+    }
+    if body.include_extensions is not None:
+        job_params["include_extensions"] = body.include_extensions
+    jid = scan_jobs_service.enqueue_scan_job(
+        ds_id=body.data_source_id,
+        job_type=scan_jobs_service.JOB_TYPE_CHUNK_COMPLETED_TEXT,
+        requested_by=ctx.id,
+        job_params=job_params,
+        priority=int(body.priority),
+    )
+    ok = jid is not None
+    detail: dict[str, Any] = {
+        "job_id": str(jid) if jid else None,
+        "data_source_id": str(body.data_source_id),
+        "limit": body.limit,
+        "chunk_size": body.chunk_size,
+        "chunk_overlap": body.chunk_overlap,
+        "min_chunk_size": body.min_chunk_size,
+        "reprocess": body.reprocess,
+        "include_extensions": body.include_extensions,
+    }
+    write_action_log_safe(
+        user_id=ctx.id,
+        action_type="JOB_CHUNK_COMPLETED_TEXT_ENQUEUE",
+        result="SUCCESS" if ok else "FAIL",
+        request=request,
+        data_source_id=body.data_source_id,
+        detail=detail,
+        error_message=None if ok else "Failed to enqueue chunk-completed-text job",
+    )
+    if not ok:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": "Failed to enqueue chunk-completed-text job (DB error or scan_jobs not ready)",
+            },
+        )
+    payload = AdminChunkCompletedTextJobResponse(job_id=jid)
     return JSONResponse(status_code=200, content=payload.model_dump(mode="json"))
 
 
