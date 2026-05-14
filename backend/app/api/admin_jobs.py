@@ -12,6 +12,8 @@ from app.core.auth_dependencies import CurrentUserContext, require_admin_user
 from app.schemas.admin_jobs import (
     AdminChunkCompletedTextJobRequest,
     AdminChunkCompletedTextJobResponse,
+    AdminEmbedPendingChunksJobRequest,
+    AdminEmbedPendingChunksJobResponse,
     AdminJobCancelResponse,
     AdminProcessPendingDocumentsJobRequest,
     AdminProcessPendingDocumentsJobResponse,
@@ -311,6 +313,58 @@ def admin_enqueue_chunk_completed_text_job(
             },
         )
     payload = AdminChunkCompletedTextJobResponse(job_id=jid)
+    return JSONResponse(status_code=200, content=payload.model_dump(mode="json"))
+
+
+@router.post("/jobs/embed-pending-chunks", response_model=None)
+def admin_enqueue_embed_pending_chunks_job(
+    request: Request,
+    body: AdminEmbedPendingChunksJobRequest,
+    ctx: CurrentUserContext = Depends(require_admin_user),
+) -> JSONResponse:
+    """Queue a **PENDING** ``EMBED_PENDING_CHUNKS`` job for the DB polling worker."""
+    job_params: dict[str, Any] = {
+        "limit": int(body.limit),
+        "batch_size": int(body.batch_size),
+        "reembed": bool(body.reembed),
+        "created_for": "embed_pending_chunks_worker",
+    }
+    if body.include_extensions is not None:
+        job_params["include_extensions"] = body.include_extensions
+    jid = scan_jobs_service.enqueue_scan_job(
+        ds_id=body.data_source_id,
+        job_type=scan_jobs_service.JOB_TYPE_EMBED_PENDING_CHUNKS,
+        requested_by=ctx.id,
+        job_params=job_params,
+        priority=int(body.priority),
+    )
+    ok = jid is not None
+    detail: dict[str, Any] = {
+        "job_id": str(jid) if jid else None,
+        "data_source_id": str(body.data_source_id),
+        "limit": body.limit,
+        "batch_size": body.batch_size,
+        "include_extensions": body.include_extensions,
+        "reembed": body.reembed,
+    }
+    write_action_log_safe(
+        user_id=ctx.id,
+        action_type="JOB_EMBED_PENDING_CHUNKS_ENQUEUE",
+        result="SUCCESS" if ok else "FAIL",
+        request=request,
+        data_source_id=body.data_source_id,
+        detail=detail,
+        error_message=None if ok else "Failed to enqueue embed-pending-chunks job",
+    )
+    if not ok:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": "Failed to enqueue embed-pending-chunks job (DB error or scan_jobs not ready)",
+            },
+        )
+    payload = AdminEmbedPendingChunksJobResponse(job_id=jid)
     return JSONResponse(status_code=200, content=payload.model_dump(mode="json"))
 
 

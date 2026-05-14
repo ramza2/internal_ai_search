@@ -170,6 +170,23 @@ export type AdminChunkCompletedTextJobResponse = {
   message: string;
 };
 
+/** POST /api/admin/jobs/embed-pending-chunks (worker queue, no dry_run) */
+export type AdminEmbedPendingChunksJobRequest = {
+  data_source_id: string;
+  limit?: number;
+  batch_size?: number;
+  include_extensions?: string | null;
+  reembed?: boolean;
+  priority?: number;
+};
+
+export type AdminEmbedPendingChunksJobResponse = {
+  status: string;
+  job_id: string;
+  job_type: string;
+  message: string;
+};
+
 /** POST /api/admin/jobs/{job_id}/cancel */
 export type AdminJobCancelRequest = {
   reason?: string | null;

@@ -3,8 +3,9 @@
 ``WEBDAV_SYNC_TREE`` runs the same core logic as the synchronous HTTP route
 when ``job_params.worker_test_mode`` is absent. ``PROCESS_PENDING_TEXT``,
 ``PROCESS_PENDING_DOCUMENTS``, and ``CHUNK_COMPLETED_TEXT`` run their
-respective core functions with the dequeued ``scan_jobs`` row. Other job
-types remain unimplemented unless flagged for tests (e.g. ``EMBED_PENDING_CHUNKS``).
+respective core functions with the dequeued ``scan_jobs`` row.
+``EMBED_PENDING_CHUNKS`` runs :func:`run_embed_pending_chunks_core`.
+Other job types remain unimplemented unless flagged for tests.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from typing import Any
 from app.core.config import settings
 from app.services import scan_jobs_service
 from app.services.file_recursive_sync_service import run_webdav_recursive_sync_core
+from app.services.chunk_embedding_service import run_embed_pending_chunks_core
 from app.services.chunk_text_processor_service import run_chunk_completed_text_core
 from app.services.pending_document_processor_service import (
     run_process_pending_documents_core,
@@ -240,6 +242,43 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
         pl = core.payload
         ok = str(pl.get("status") or "").lower() == "ok"
         msg = str(pl.get("message") or ("Finished" if ok else "Chunk-completed-text failed"))
+        return WorkerRunResult(
+            success=ok,
+            message=msg,
+            finalized_by_handler=core.finalized_scan_job,
+        )
+
+    if job.job_type == scan_jobs_service.JOB_TYPE_EMBED_PENDING_CHUNKS:
+        if job.data_source_id is None:
+            return WorkerRunResult(
+                success=False,
+                message="EMBED_PENDING_CHUNKS job is missing data_source_id",
+            )
+        p = params or {}
+        limit = _coerce_int(p.get("limit"), 500, lo=1, hi=10_000)
+        batch_size = _coerce_int(p.get("batch_size"), 32, lo=1, hi=128)
+        reembed = bool(p.get("reembed", False))
+        inc_raw = _coerce_str(p.get("include_extensions"))
+        wid = (settings.worker_id or "local-worker-1").strip()[:100]
+
+        core = run_embed_pending_chunks_core(
+            settings,
+            job.data_source_id,
+            ds_name=None,
+            rows=None,
+            limit=limit,
+            batch_size=batch_size,
+            include_extensions=inc_raw,
+            reembed=reembed,
+            file_id=None,
+            scan_job_id=job.id,
+            requested_by=job.requested_by,
+            cancel_check=lambda: scan_jobs_service.is_cancel_requested(job.id),
+            heartbeat_worker_id=wid,
+        )
+        pl = core.payload
+        ok = str(pl.get("status") or "").lower() == "ok"
+        msg = str(pl.get("message") or ("Finished" if ok else "Embed-pending-chunks failed"))
         return WorkerRunResult(
             success=ok,
             message=msg,

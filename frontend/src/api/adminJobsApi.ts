@@ -13,6 +13,8 @@ import type {
   AdminProcessPendingDocumentsJobResponse,
   AdminChunkCompletedTextJobRequest,
   AdminChunkCompletedTextJobResponse,
+  AdminEmbedPendingChunksJobRequest,
+  AdminEmbedPendingChunksJobResponse,
   AdminSyncTreeJobRequest,
   AdminSyncTreeJobResponse,
   AdminTestEnqueueBody,
@@ -78,6 +80,17 @@ export async function postAdminChunkCompletedTextJob(
 ): Promise<AdminChunkCompletedTextJobResponse> {
   const { data } = await httpClient.post<AdminChunkCompletedTextJobResponse>(
     "/api/admin/jobs/chunk-completed-text",
+    body
+  );
+  return data;
+}
+
+/** Queue a real EMBED_PENDING_CHUNKS PENDING job for the DB worker. */
+export async function postAdminEmbedPendingChunksJob(
+  body: AdminEmbedPendingChunksJobRequest
+): Promise<AdminEmbedPendingChunksJobResponse> {
+  const { data } = await httpClient.post<AdminEmbedPendingChunksJobResponse>(
+    "/api/admin/jobs/embed-pending-chunks",
     body
   );
   return data;

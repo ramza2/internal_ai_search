@@ -175,6 +175,16 @@ export function AdminJobsPage() {
   const [chunkMsg, setChunkMsg] = useState<string | null>(null);
   const [chunkJobId, setChunkJobId] = useState<string | null>(null);
 
+  const [embedDsId, setEmbedDsId] = useState("");
+  const [embedLimit, setEmbedLimit] = useState(500);
+  const [embedBatchSize, setEmbedBatchSize] = useState(32);
+  const [embedIncludeExt, setEmbedIncludeExt] = useState("");
+  const [embedReembed, setEmbedReembed] = useState(false);
+  const [embedPriority, setEmbedPriority] = useState(0);
+  const [embedBusy, setEmbedBusy] = useState(false);
+  const [embedMsg, setEmbedMsg] = useState<string | null>(null);
+  const [embedJobId, setEmbedJobId] = useState<string | null>(null);
+
   const [modalJobId, setModalJobId] = useState<string | null>(null);
   const [detail, setDetail] = useState<AdminJobDetailResponse | null>(null);
   const [detailErr, setDetailErr] = useState("");
@@ -239,6 +249,11 @@ export function AdminJobsPage() {
   useEffect(() => {
     const sid = applied.dataSourceId.trim();
     if (sid) setChunkDsId(sid);
+  }, [applied.dataSourceId]);
+
+  useEffect(() => {
+    const sid = applied.dataSourceId.trim();
+    if (sid) setEmbedDsId(sid);
   }, [applied.dataSourceId]);
 
   async function onTestEnqueue() {
@@ -407,6 +422,42 @@ export function AdminJobsPage() {
       setChunkMsg(getApiErrorMessage(e));
     } finally {
       setChunkBusy(false);
+    }
+  }
+
+  async function onEnqueueEmbedPendingChunks() {
+    const dsId = embedDsId.trim() || applied.dataSourceId.trim() || dataSources[0]?.id || "";
+    if (!dsId) {
+      setEmbedMsg("데이터 소스를 선택하세요. (필터의 소스 또는 아래 선택 목록)");
+      setEmbedJobId(null);
+      return;
+    }
+    const lim = Math.min(10_000, Math.max(1, Number(embedLimit) || 500));
+    const bs = Math.min(128, Math.max(1, Number(embedBatchSize) || 32));
+    setEmbedBusy(true);
+    setEmbedMsg(null);
+    setEmbedJobId(null);
+    try {
+      const extTrim = embedIncludeExt.trim();
+      const res = await adminJobsApi.postAdminEmbedPendingChunksJob({
+        data_source_id: dsId,
+        limit: lim,
+        batch_size: bs,
+        reembed: embedReembed,
+        include_extensions: extTrim.length > 0 ? extTrim : undefined,
+        priority: Number.isFinite(embedPriority) ? embedPriority : 0,
+      });
+      setEmbedJobId(res.job_id);
+      setEmbedMsg(
+        `${res.message} · job_id: ${res.job_id}.\n` +
+          "worker를 실행해야 PENDING 작업이 처리됩니다.\n" +
+          "완료 후 검색/RAG에 반영됩니다."
+      );
+      await fetchList();
+    } catch (e) {
+      setEmbedMsg(getApiErrorMessage(e));
+    } finally {
+      setEmbedBusy(false);
     }
   }
 
@@ -1062,6 +1113,114 @@ export function AdminJobsPage() {
         {chunkMsg != null && chunkMsg !== "" && (
           <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
             {chunkMsg}
+          </p>
+        )}
+      </SectionCard>
+
+      <SectionCard title="백그라운드 Embedding 생성">
+        <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
+          <code>POST /api/admin/jobs/embed-pending-chunks</code>로 <strong>EMBED_PENDING_CHUNKS</strong> 작업을 큐에 넣습니다. 동기 API{" "}
+          <code>POST /api/data-sources/…/embed-pending-chunks</code>(dry_run 포함) 및 PipelineRunModal과 별개입니다.{" "}
+          <strong>worker</strong>(<code>python -m app.worker_main</code>)를 실행해야 처리됩니다.
+        </p>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))",
+            gap: "0.75rem",
+            alignItems: "end",
+            marginTop: "0.5rem",
+          }}
+        >
+          <FilterField label="data_source_id">
+            <Select
+              value={embedDsId}
+              onChange={(e) => setEmbedDsId(e.target.value)}
+              disabled={embedBusy || listBusy}
+            >
+              <option value="">선택…</option>
+              {dataSources.map((ds) => (
+                <option key={ds.id} value={ds.id}>
+                  {ds.name}
+                  {!ds.is_active ? " (비활성)" : ""}
+                </option>
+              ))}
+            </Select>
+          </FilterField>
+          <FilterField label="limit">
+            <Input
+              type="number"
+              min={1}
+              max={10000}
+              value={String(embedLimit)}
+              onChange={(e) => setEmbedLimit(Number(e.target.value))}
+              disabled={embedBusy || listBusy}
+            />
+          </FilterField>
+          <FilterField label="batch_size">
+            <Input
+              type="number"
+              min={1}
+              max={128}
+              value={String(embedBatchSize)}
+              onChange={(e) => setEmbedBatchSize(Number(e.target.value))}
+              disabled={embedBusy || listBusy}
+            />
+          </FilterField>
+          <FilterField label="priority">
+            <Input
+              type="number"
+              value={String(embedPriority)}
+              onChange={(e) => setEmbedPriority(Number(e.target.value))}
+              disabled={embedBusy || listBusy}
+            />
+          </FilterField>
+        </div>
+        <FilterField label="include_extensions (선택)" wide>
+          <Input
+            value={embedIncludeExt}
+            onChange={(e) => setEmbedIncludeExt(e.target.value)}
+            placeholder="예: txt,md,pdf,docx,hwpx — 비우면 서버 기본(필터 없음)"
+            disabled={embedBusy || listBusy}
+          />
+        </FilterField>
+        <label
+          style={{
+            display: "inline-flex",
+            gap: "0.35rem",
+            alignItems: "center",
+            fontSize: "0.875rem",
+            cursor: "pointer",
+            marginTop: "0.35rem",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={embedReembed}
+            onChange={(e) => setEmbedReembed(e.target.checked)}
+            disabled={embedBusy || listBusy}
+          />
+          기존 Embedding을 재생성합니다 (reembed). 취소 시 batch 경계에서만 중단되며, 일부 chunk만 새 벡터로 바뀔 수 있습니다.
+        </label>
+        <div style={{ marginTop: "0.75rem" }}>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={() => void onEnqueueEmbedPendingChunks()}
+            disabled={embedBusy || listBusy}
+          >
+            Embedding 생성 Job 생성
+          </Button>
+        </div>
+        {embedJobId != null && embedJobId !== "" && (
+          <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
+            마지막 생성 job_id: <code>{embedJobId}</code>
+          </p>
+        )}
+        {embedMsg != null && embedMsg !== "" && (
+          <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
+            {embedMsg}
           </p>
         )}
       </SectionCard>

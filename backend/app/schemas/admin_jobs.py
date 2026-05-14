@@ -221,6 +221,32 @@ class AdminChunkCompletedTextJobResponse(BaseModel):
     message: str = "Chunk-completed-text job queued successfully"
 
 
+class AdminEmbedPendingChunksJobRequest(BaseModel):
+    """Body for ``POST /api/admin/jobs/embed-pending-chunks`` (worker queue)."""
+
+    data_source_id: UUID
+    limit: int = Field(default=500, ge=1, le=10_000)
+    batch_size: int = Field(default=32, ge=1, le=128)
+    include_extensions: str | None = Field(default=None, max_length=2000)
+    reembed: bool = False
+    priority: int = 0
+
+    @field_validator("include_extensions", mode="before")
+    @classmethod
+    def normalize_include_extensions_embed(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s or None
+
+
+class AdminEmbedPendingChunksJobResponse(BaseModel):
+    status: str = "ok"
+    job_id: UUID
+    job_type: str = "EMBED_PENDING_CHUNKS"
+    message: str = "Embed-pending-chunks job queued successfully"
+
+
 class AdminJobCancelRequest(BaseModel):
     """Optional body for ``POST /api/admin/jobs/{job_id}/cancel``."""
 
@@ -250,6 +276,8 @@ __all__ = [
     "PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS",
     "AdminChunkCompletedTextJobRequest",
     "AdminChunkCompletedTextJobResponse",
+    "AdminEmbedPendingChunksJobRequest",
+    "AdminEmbedPendingChunksJobResponse",
     "AdminSyncTreeJobRequest",
     "AdminSyncTreeJobResponse",
     "AdminTestEnqueueRequest",
