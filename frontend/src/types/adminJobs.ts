@@ -118,6 +118,21 @@ export type AdminSyncTreeJobResponse = {
   message: string;
 };
 
+export type AdminProcessPendingTextJobRequest = {
+  data_source_id: string;
+  limit?: number;
+  max_file_size_bytes?: number;
+  include_extensions?: string | null;
+  priority?: number;
+};
+
+export type AdminProcessPendingTextJobResponse = {
+  status: string;
+  job_id: string;
+  job_type: string;
+  message: string;
+};
+
 /** POST /api/admin/jobs/{job_id}/cancel */
 export type AdminJobCancelRequest = {
   reason?: string | null;

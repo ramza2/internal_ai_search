@@ -11,10 +11,13 @@ from fastapi.responses import JSONResponse
 from app.core.auth_dependencies import CurrentUserContext, require_admin_user
 from app.schemas.admin_jobs import (
     AdminJobCancelResponse,
+    AdminProcessPendingTextJobRequest,
+    AdminProcessPendingTextJobResponse,
     AdminSyncTreeJobRequest,
     AdminSyncTreeJobResponse,
     AdminTestEnqueueRequest,
     AdminTestEnqueueResponse,
+    PROCESS_PENDING_TEXT_DEFAULT_EXTENSIONS,
 )
 from app.services import admin_jobs_service, scan_jobs_service
 from app.services.action_log_service import write_action_log_safe
@@ -147,6 +150,55 @@ def admin_enqueue_sync_tree_job(
             },
         )
     payload = AdminSyncTreeJobResponse(job_id=jid)
+    return JSONResponse(status_code=200, content=payload.model_dump(mode="json"))
+
+
+@router.post("/jobs/process-pending-text", response_model=None)
+def admin_enqueue_process_pending_text_job(
+    request: Request,
+    body: AdminProcessPendingTextJobRequest,
+    ctx: CurrentUserContext = Depends(require_admin_user),
+) -> JSONResponse:
+    """Queue a **PENDING** ``PROCESS_PENDING_TEXT`` job for the DB polling worker."""
+    inc = body.include_extensions or PROCESS_PENDING_TEXT_DEFAULT_EXTENSIONS
+    job_params = {
+        "limit": int(body.limit),
+        "max_file_size_bytes": int(body.max_file_size_bytes),
+        "include_extensions": inc,
+        "created_for": "process_pending_text_worker",
+    }
+    jid = scan_jobs_service.enqueue_scan_job(
+        ds_id=body.data_source_id,
+        job_type=scan_jobs_service.JOB_TYPE_PROCESS_PENDING_TEXT,
+        requested_by=ctx.id,
+        job_params=job_params,
+        priority=int(body.priority),
+    )
+    ok = jid is not None
+    write_action_log_safe(
+        user_id=ctx.id,
+        action_type="JOB_PROCESS_PENDING_TEXT_ENQUEUE",
+        result="SUCCESS" if ok else "FAIL",
+        request=request,
+        data_source_id=body.data_source_id,
+        detail={
+            "job_id": str(jid) if jid else None,
+            "data_source_id": str(body.data_source_id),
+            "limit": body.limit,
+            "max_file_size_bytes": body.max_file_size_bytes,
+            "include_extensions": inc,
+        },
+        error_message=None if ok else "Failed to enqueue process-pending-text job",
+    )
+    if not ok:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": "Failed to enqueue process-pending-text job (DB error or scan_jobs not ready)",
+            },
+        )
+    payload = AdminProcessPendingTextJobResponse(job_id=jid)
     return JSONResponse(status_code=200, content=payload.model_dump(mode="json"))
 
 

@@ -1,10 +1,10 @@
 """Dispatch ``WorkerJob`` to handlers.
 
 ``WEBDAV_SYNC_TREE`` runs the same core logic as the synchronous HTTP route
-when ``job_params.worker_test_mode`` is absent. Other job types remain
-unimplemented unless flagged for tests.
+when ``job_params.worker_test_mode`` is absent. ``PROCESS_PENDING_TEXT``
+runs :func:`run_process_pending_text_core` with the dequeued ``scan_jobs`` row.
+Other job types remain unimplemented unless flagged for tests.
 """
-
 from __future__ import annotations
 
 import logging
@@ -13,6 +13,7 @@ from typing import Any
 from app.core.config import settings
 from app.services import scan_jobs_service
 from app.services.file_recursive_sync_service import run_webdav_recursive_sync_core
+from app.services.pending_text_processor_service import run_process_pending_text_core
 from app.workers.worker_types import WorkerJob, WorkerRunResult
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,13 @@ def _coerce_int(v: Any, default: int, *, lo: int | None = None, hi: int | None =
     if hi is not None and n > hi:
         n = hi
     return n
+
+
+def _coerce_str(v: Any) -> str | None:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
 
 
 def run_job(job: WorkerJob) -> WorkerRunResult:
@@ -117,6 +125,44 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
             success=ok,
             message=msg,
             finalized_by_handler=out.finalized_scan_job,
+        )
+
+    if job.job_type == scan_jobs_service.JOB_TYPE_PROCESS_PENDING_TEXT:
+        if job.data_source_id is None:
+            return WorkerRunResult(
+                success=False,
+                message="PROCESS_PENDING_TEXT job is missing data_source_id",
+            )
+        p = params or {}
+        limit = _coerce_int(p.get("limit"), 100, lo=1, hi=5000)
+        max_bytes = _coerce_int(
+            p.get("max_file_size_bytes"),
+            5_242_880,
+            lo=1,
+            hi=100 * 1024 * 1024,
+        )
+        inc_raw = _coerce_str(p.get("include_extensions"))
+        wid = (settings.worker_id or "local-worker-1").strip()[:100]
+
+        core = run_process_pending_text_core(
+            settings,
+            job.data_source_id,
+            limit=limit,
+            max_file_size_bytes=max_bytes,
+            include_extensions=inc_raw,
+            scan_job_id=job.id,
+            requested_by=job.requested_by,
+            cancel_check=lambda: scan_jobs_service.is_cancel_requested(job.id),
+            heartbeat_worker_id=wid,
+            preflight_ctx=None,
+        )
+        pl = core.payload
+        ok = str(pl.get("status") or "").lower() == "ok"
+        msg = str(pl.get("message") or ("Finished" if ok else "Process-pending-text failed"))
+        return WorkerRunResult(
+            success=ok,
+            message=msg,
+            finalized_by_handler=core.finalized_scan_job,
         )
 
     return WorkerRunResult(

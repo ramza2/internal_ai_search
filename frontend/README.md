@@ -44,7 +44,7 @@ Vite + React + TypeScript 기반 웹 UI. 백엔드(FastAPI)와 JWT 인증으로 
 - **작업 목록**은 `GET /api/admin/jobs`로 `scan_jobs`를 조회합니다. `PENDING` / `RUNNING` / `CANCELLING` / `COMPLETED` / `FAILED` / `CANCELLED` 등 상태는 배지(`getJobStatusBadgeVariant`)로 표시하고, **`worker_id`**, **`heartbeat_at`**, **`priority`**, **`job_params`**(목록·상세)를 확인할 수 있습니다.
 - **취소:** `POST /api/admin/jobs/{job_id}/cancel` — 목록·상세에서 **취소** / **취소 요청** / **취소 요청 중**(비활성) 버튼으로 호출합니다. **`PENDING`**은 즉시 **`CANCELLED`**로 끝나고, **`RUNNING`**은 **`CANCELLING`**으로 바뀐 뒤 worker가 **다음 안전 지점**에서 **`CANCELLED`**로 마무리합니다(동기 `sync-tree` API와 무관).
 - **Stale heartbeat 표시:** `RUNNING`이면서 **`heartbeat_at`**이 클라이언트 기준 **30분** 이상 지난 경우 **「heartbeat 지연」** 배지를 둘 수 있습니다. 실제 정리 기준은 백엔드 **`WORKER_STALE_TIMEOUT_MINUTES`**와 동일하게 맞추려면 추후 설정/환경 변수 연동이 필요합니다(TODO).
-- **백그라운드 동기화 (WebDAV sync-tree)** 섹션에서 `POST /api/admin/jobs/sync-tree`로 실제 재귀 동기화 작업을 큐에 넣을 수 있습니다. **worker**(`python -m app.worker_main`)를 실행해야 `PENDING` → `RUNNING` → 완료까지 진행됩니다. 루프 시작 시 worker는 오래된 **`RUNNING`**(heartbeat 끊김 등)을 **`FAILED`**로 표시할 수 있습니다(`backend/README.md` 참고). 동기 API `POST /api/data-sources/…/sync-tree` 및 **PipelineRunModal**의 동기 실행과는 별도 경로입니다.
+- **백그라운드 텍스트 처리:** `POST /api/admin/jobs/process-pending-text`로 **PROCESS_PENDING_TEXT** 큐 Job 생성. **백그라운드 동기화**와 동일하게 worker 실행이 필요합니다. **PipelineRunModal**·데이터 소스의 동기 `process-pending-text`(dry_run 포함)와 병행 가능한 별도 경로입니다.
 - 긴 sync-tree 실행 중 **DB heartbeat**는 백엔드에서 일정 간격으로만 갱신합니다. **진행 중 세부 heartbeat(폴더 단위 등)는 다음 단계에서 보강**할 수 있습니다.
 - 화면 상단 **개발·검증용** 접이 패널에서 **테스트 Job 생성**을 누르면 `POST /api/admin/jobs/test-enqueue`를 호출합니다. **데이터 소스**는 현재 필터에 선택된 값이 있으면 그 UUID를 쓰고, 없으면 목록의 **첫 번째 데이터 소스**를 사용합니다. 둘 다 없으면 오류 메시지를 냅니다. **`fail_test`** 체크 시 의도적으로 실패하는 큐 행이 만들어집니다.
 - 별도 터미널에서 백엔드 디렉터리로 이동한 뒤 **`python -m app.worker_main`**을 실행하면 큐의 **`PENDING`** 작업이 **`RUNNING` → `COMPLETED`(또는 `fail_test` 시 `FAILED`)**로 바뀌는지 확인할 수 있습니다.
@@ -93,10 +93,11 @@ npm run preview
 
 ## 작업 목록 (`/admin/jobs`)
 
-- **API:** `src/api/adminJobsApi.ts` — `GET /api/admin/jobs`, `GET /api/admin/jobs/{id}`, `GET /api/admin/jobs/{id}/failures`, **`POST /api/admin/jobs/{id}/cancel`**, **`POST /api/admin/jobs/test-enqueue`** (개발·검증용, `src/types/adminJobs.ts`).
+- **API:** `src/api/adminJobsApi.ts` — `GET /api/admin/jobs`, `GET /api/admin/jobs/{id}`, `GET /api/admin/jobs/{id}/failures`, **`POST /api/admin/jobs/{id}/cancel`**, **`POST /api/admin/jobs/sync-tree`**, **`POST /api/admin/jobs/process-pending-text`**, **`POST /api/admin/jobs/test-enqueue`** (개발·검증용, `src/types/adminJobs.ts`).
 - **job_type 표시:** `src/utils/jobLabels.ts`의 `getJobTypeLabel`로 한글 라벨(예: `MANUAL_SCAN` → 수동 작업, `WEBDAV_SYNC_TREE` → 재귀 동기화). 백엔드에만 있는 코드는 그대로 표시합니다. 상태 배지는 `getJobStatusBadgeVariant`로 대시보드와 공유합니다(`CANCELLING`·`CANCELLED` 포함).
 - **요청자:** 상세 모달에서 `requested_by_name` / `requested_by_login_id`를 표시합니다. 값이 없으면 **알 수 없음**(과거 `MANUAL_SCAN` 행 등).
 - **필터:** `status`, `job_type`, `data_source_id`, `keyword`(소스 이름·`current_file_path`·`error_message` ILIKE), `from_date` / `to_date`, `limit`(20/50/100), `offset`. 상태 필터에 **`CANCELLING`**, **`CANCELLED`** 포함. **조회** 시 적용·offset 리셋, **초기화**로 필터 초기화.
+- **백그라운드 Job 생성:** **백그라운드 동기화 (sync-tree)** 및 **백그라운드 텍스트 처리** 섹션에서 각각 `POST /api/admin/jobs/sync-tree`, `POST /api/admin/jobs/process-pending-text` 호출. 성공 시 job_id·worker 실행 안내.
 - **목록:** 작업 유형(한글 + 코드)·상태 배지·소스명·**우선순위**·**job_params**(짧은 JSON)·**worker_id**·**heartbeat**·(지연 시 **heartbeat 지연** 배지)·시작/종료·`formatDuration` 소요 시간·진행률(퍼센트 + processed/total)·완료/실패/스킵/삭제 카운트·오류 요약·**상세**·**취소/취소 요청** 버튼(`ConfirmDialog`).
 - **상세:** 모달에서 job 메타·카운터·`error_message` 및 **실패 목록** 테이블(`scan_failures`). 실패가 없으면 `EmptyState`. 상단에 취소 동작(동일 정책).
 - **경고:** `scan_jobs` / `scan_failures` 테이블이 없는 개발 DB에서는 API가 빈 목록과 `warnings`를 주며 UI에 안내합니다.

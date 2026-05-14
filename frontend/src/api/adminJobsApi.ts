@@ -7,6 +7,8 @@ import type {
   AdminJobListResponse,
   AdminJobFailuresParams,
   AdminJobsListParams,
+  AdminProcessPendingTextJobRequest,
+  AdminProcessPendingTextJobResponse,
   AdminSyncTreeJobRequest,
   AdminSyncTreeJobResponse,
   AdminTestEnqueueBody,
@@ -42,6 +44,17 @@ export async function postAdminTestEnqueue(body: AdminTestEnqueueBody): Promise<
 /** Queue a real WEBDAV_SYNC_TREE PENDING job for the DB worker. */
 export async function postAdminSyncTreeJob(body: AdminSyncTreeJobRequest): Promise<AdminSyncTreeJobResponse> {
   const { data } = await httpClient.post<AdminSyncTreeJobResponse>("/api/admin/jobs/sync-tree", body);
+  return data;
+}
+
+/** Queue a real PROCESS_PENDING_TEXT PENDING job for the DB worker. */
+export async function postAdminProcessPendingTextJob(
+  body: AdminProcessPendingTextJobRequest
+): Promise<AdminProcessPendingTextJobResponse> {
+  const { data } = await httpClient.post<AdminProcessPendingTextJobResponse>(
+    "/api/admin/jobs/process-pending-text",
+    body
+  );
   return data;
 }
 

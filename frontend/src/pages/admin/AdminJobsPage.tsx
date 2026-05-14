@@ -51,6 +51,8 @@ const LIMIT_OPTIONS = [20, 50, 100] as const;
 /** Client-side stale hint only; align with backend stale policy later (TODO). */
 const STALE_HEARTBEAT_MS = 30 * 60 * 1000;
 
+const DEFAULT_TEXT_JOB_EXTENSIONS = "txt,md,py,java,sql,json,yml,yaml,log,csv";
+
 type Draft = {
   status: string;
   jobType: string;
@@ -140,6 +142,15 @@ export function AdminJobsPage() {
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [syncJobId, setSyncJobId] = useState<string | null>(null);
 
+  const [textDsId, setTextDsId] = useState("");
+  const [textLimit, setTextLimit] = useState(100);
+  const [textMaxMb, setTextMaxMb] = useState(5);
+  const [textIncludeExt, setTextIncludeExt] = useState(DEFAULT_TEXT_JOB_EXTENSIONS);
+  const [textPriority, setTextPriority] = useState(0);
+  const [textBusy, setTextBusy] = useState(false);
+  const [textMsg, setTextMsg] = useState<string | null>(null);
+  const [textJobId, setTextJobId] = useState<string | null>(null);
+
   const [modalJobId, setModalJobId] = useState<string | null>(null);
   const [detail, setDetail] = useState<AdminJobDetailResponse | null>(null);
   const [detailErr, setDetailErr] = useState("");
@@ -189,6 +200,11 @@ export function AdminJobsPage() {
   useEffect(() => {
     const sid = applied.dataSourceId.trim();
     if (sid) setSyncDsId(sid);
+  }, [applied.dataSourceId]);
+
+  useEffect(() => {
+    const sid = applied.dataSourceId.trim();
+    if (sid) setTextDsId(sid);
   }, [applied.dataSourceId]);
 
   async function onTestEnqueue() {
@@ -243,6 +259,38 @@ export function AdminJobsPage() {
       setSyncMsg(getApiErrorMessage(e));
     } finally {
       setSyncBusy(false);
+    }
+  }
+
+  async function onEnqueueProcessPendingText() {
+    const dsId = textDsId.trim() || applied.dataSourceId.trim() || dataSources[0]?.id || "";
+    if (!dsId) {
+      setTextMsg("데이터 소스를 선택하세요. (필터의 소스 또는 아래 선택 목록)");
+      setTextJobId(null);
+      return;
+    }
+    const lim = Math.min(5000, Math.max(1, Number(textLimit) || 100));
+    const maxMb = Math.max(0.001, Number(textMaxMb) || 5);
+    const maxBytes = Math.round(maxMb * 1024 * 1024);
+    setTextBusy(true);
+    setTextMsg(null);
+    setTextJobId(null);
+    try {
+      const extTrim = textIncludeExt.trim();
+      const res = await adminJobsApi.postAdminProcessPendingTextJob({
+        data_source_id: dsId,
+        limit: lim,
+        max_file_size_bytes: maxBytes,
+        include_extensions: extTrim.length > 0 ? extTrim : undefined,
+        priority: Number.isFinite(textPriority) ? textPriority : 0,
+      });
+      setTextJobId(res.job_id);
+      setTextMsg(`${res.message} · job_id: ${res.job_id}. worker를 실행해야 PENDING 작업이 처리됩니다.`);
+      await fetchList();
+    } catch (e) {
+      setTextMsg(getApiErrorMessage(e));
+    } finally {
+      setTextBusy(false);
     }
   }
 
@@ -572,6 +620,96 @@ export function AdminJobsPage() {
         {syncMsg != null && syncMsg !== "" && (
           <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
             {syncMsg}
+          </p>
+        )}
+      </SectionCard>
+
+      <SectionCard title="백그라운드 텍스트 처리">
+        <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
+          <code>POST /api/admin/jobs/process-pending-text</code>로 <strong>PROCESS_PENDING_TEXT</strong> 작업을 큐에 넣습니다. 동기 API{" "}
+          <code>POST /api/data-sources/…/process-pending-text</code>(dry_run 포함) 및 PipelineRunModal과 별개입니다.{" "}
+          <strong>worker</strong>(<code>python -m app.worker_main</code>)를 실행해야 처리됩니다.
+        </p>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))",
+            gap: "0.75rem",
+            alignItems: "end",
+            marginTop: "0.5rem",
+          }}
+        >
+          <FilterField label="data_source_id">
+            <Select
+              value={textDsId}
+              onChange={(e) => setTextDsId(e.target.value)}
+              disabled={textBusy || listBusy}
+            >
+              <option value="">선택…</option>
+              {dataSources.map((ds) => (
+                <option key={ds.id} value={ds.id}>
+                  {ds.name}
+                  {!ds.is_active ? " (비활성)" : ""}
+                </option>
+              ))}
+            </Select>
+          </FilterField>
+          <FilterField label="limit">
+            <Input
+              type="number"
+              min={1}
+              max={5000}
+              value={String(textLimit)}
+              onChange={(e) => setTextLimit(Number(e.target.value))}
+              disabled={textBusy || listBusy}
+            />
+          </FilterField>
+          <FilterField label="max_file_size_mb">
+            <Input
+              type="number"
+              min={0.001}
+              step={0.5}
+              value={String(textMaxMb)}
+              onChange={(e) => setTextMaxMb(Number(e.target.value))}
+              disabled={textBusy || listBusy}
+            />
+          </FilterField>
+          <FilterField label="priority">
+            <Input
+              type="number"
+              value={String(textPriority)}
+              onChange={(e) => setTextPriority(Number(e.target.value))}
+              disabled={textBusy || listBusy}
+            />
+          </FilterField>
+        </div>
+        <FilterField label="include_extensions" wide>
+          <Input
+            value={textIncludeExt}
+            onChange={(e) => setTextIncludeExt(e.target.value)}
+            placeholder={DEFAULT_TEXT_JOB_EXTENSIONS}
+            disabled={textBusy || listBusy}
+          />
+        </FilterField>
+        <div style={{ marginTop: "0.75rem" }}>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={() => void onEnqueueProcessPendingText()}
+            disabled={textBusy || listBusy}
+          >
+            Text 처리 Job 생성
+          </Button>
+        </div>
+        {textJobId != null && textJobId !== "" && (
+          <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
+            마지막 생성 job_id: <code>{textJobId}</code>
+          </p>
+        )}
+        {textMsg != null && textMsg !== "" && (
+          <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
+            {textMsg}
           </p>
         )}
       </SectionCard>
