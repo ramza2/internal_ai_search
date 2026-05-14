@@ -20,6 +20,7 @@ import {
 } from "@/components/ui";
 import { useDataSources } from "@/hooks/useDataSources";
 import type { AdminJob, AdminJobDetailResponse, AdminJobFailure, AdminJobFailuresResponse } from "@/types/adminJobs";
+import { PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS } from "@/types/adminJobs";
 import { formatDateTime, formatDuration } from "@/utils/format";
 import { getJobStatusBadgeVariant, getJobTypeLabel } from "@/utils/jobLabels";
 import docStyles from "./DocumentProcessModal.module.css";
@@ -151,6 +152,16 @@ export function AdminJobsPage() {
   const [textMsg, setTextMsg] = useState<string | null>(null);
   const [textJobId, setTextJobId] = useState<string | null>(null);
 
+  const [docDsId, setDocDsId] = useState("");
+  const [docLimit, setDocLimit] = useState(50);
+  const [docMaxMb, setDocMaxMb] = useState(50);
+  const [docIncludeExt, setDocIncludeExt] = useState(PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS);
+  const [docReprocessSkipped, setDocReprocessSkipped] = useState(false);
+  const [docPriority, setDocPriority] = useState(0);
+  const [docBusy, setDocBusy] = useState(false);
+  const [docMsg, setDocMsg] = useState<string | null>(null);
+  const [docJobId, setDocJobId] = useState<string | null>(null);
+
   const [modalJobId, setModalJobId] = useState<string | null>(null);
   const [detail, setDetail] = useState<AdminJobDetailResponse | null>(null);
   const [detailErr, setDetailErr] = useState("");
@@ -205,6 +216,11 @@ export function AdminJobsPage() {
   useEffect(() => {
     const sid = applied.dataSourceId.trim();
     if (sid) setTextDsId(sid);
+  }, [applied.dataSourceId]);
+
+  useEffect(() => {
+    const sid = applied.dataSourceId.trim();
+    if (sid) setDocDsId(sid);
   }, [applied.dataSourceId]);
 
   async function onTestEnqueue() {
@@ -291,6 +307,43 @@ export function AdminJobsPage() {
       setTextMsg(getApiErrorMessage(e));
     } finally {
       setTextBusy(false);
+    }
+  }
+
+  async function onEnqueueProcessPendingDocuments() {
+    const dsId = docDsId.trim() || applied.dataSourceId.trim() || dataSources[0]?.id || "";
+    if (!dsId) {
+      setDocMsg("데이터 소스를 선택하세요. (필터의 소스 또는 아래 선택 목록)");
+      setDocJobId(null);
+      return;
+    }
+    const lim = Math.min(5000, Math.max(1, Number(docLimit) || 50));
+    const maxMb = Math.max(0.001, Number(docMaxMb) || 50);
+    const maxBytes = Math.round(maxMb * 1024 * 1024);
+    setDocBusy(true);
+    setDocMsg(null);
+    setDocJobId(null);
+    try {
+      const extTrim = docIncludeExt.trim();
+      const res = await adminJobsApi.postAdminProcessPendingDocumentsJob({
+        data_source_id: dsId,
+        limit: lim,
+        max_file_size_bytes: maxBytes,
+        include_extensions: extTrim.length > 0 ? extTrim : undefined,
+        reprocess_skipped: docReprocessSkipped,
+        priority: Number.isFinite(docPriority) ? docPriority : 0,
+      });
+      setDocJobId(res.job_id);
+      setDocMsg(
+        `${res.message} · job_id: ${res.job_id}.\n` +
+          "worker를 실행해야 PENDING 작업이 처리됩니다.\n" +
+          "처리 후 검색/RAG 반영을 위해 Chunk 생성과 Embedding 생성이 필요합니다."
+      );
+      await fetchList();
+    } catch (e) {
+      setDocMsg(getApiErrorMessage(e));
+    } finally {
+      setDocBusy(false);
     }
   }
 
@@ -710,6 +763,114 @@ export function AdminJobsPage() {
         {textMsg != null && textMsg !== "" && (
           <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
             {textMsg}
+          </p>
+        )}
+      </SectionCard>
+
+      <SectionCard title="백그라운드 문서 처리">
+        <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
+          <code>POST /api/admin/jobs/process-pending-documents</code>로 <strong>PROCESS_PENDING_DOCUMENTS</strong> 작업을 큐에 넣습니다. 동기 API{" "}
+          <code>POST /api/data-sources/…/process-pending-documents</code>(dry_run 포함) 및 DataSourcesPage 문서 처리 모달·PipelineRunModal과 별개입니다.{" "}
+          <strong>worker</strong>(<code>python -m app.worker_main</code>)를 실행해야 처리됩니다.
+        </p>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))",
+            gap: "0.75rem",
+            alignItems: "end",
+            marginTop: "0.5rem",
+          }}
+        >
+          <FilterField label="data_source_id">
+            <Select
+              value={docDsId}
+              onChange={(e) => setDocDsId(e.target.value)}
+              disabled={docBusy || listBusy}
+            >
+              <option value="">선택…</option>
+              {dataSources.map((ds) => (
+                <option key={ds.id} value={ds.id}>
+                  {ds.name}
+                  {!ds.is_active ? " (비활성)" : ""}
+                </option>
+              ))}
+            </Select>
+          </FilterField>
+          <FilterField label="limit">
+            <Input
+              type="number"
+              min={1}
+              max={5000}
+              value={String(docLimit)}
+              onChange={(e) => setDocLimit(Number(e.target.value))}
+              disabled={docBusy || listBusy}
+            />
+          </FilterField>
+          <FilterField label="max_file_size_mb">
+            <Input
+              type="number"
+              min={0.001}
+              step={0.5}
+              value={String(docMaxMb)}
+              onChange={(e) => setDocMaxMb(Number(e.target.value))}
+              disabled={docBusy || listBusy}
+            />
+          </FilterField>
+          <FilterField label="priority">
+            <Input
+              type="number"
+              value={String(docPriority)}
+              onChange={(e) => setDocPriority(Number(e.target.value))}
+              disabled={docBusy || listBusy}
+            />
+          </FilterField>
+        </div>
+        <FilterField label="include_extensions" wide>
+          <Input
+            value={docIncludeExt}
+            onChange={(e) => setDocIncludeExt(e.target.value)}
+            placeholder={PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS}
+            disabled={docBusy || listBusy}
+          />
+        </FilterField>
+        <label
+          style={{
+            display: "inline-flex",
+            gap: "0.35rem",
+            alignItems: "center",
+            fontSize: "0.875rem",
+            cursor: "pointer",
+            marginTop: "0.35rem",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={docReprocessSkipped}
+            onChange={(e) => setDocReprocessSkipped(e.target.checked)}
+            disabled={docBusy || listBusy}
+          />
+          기존 UNSUPPORTED_EXTENSION 스킵 문서를 다시 처리 (reprocess_skipped)
+        </label>
+        <div style={{ marginTop: "0.75rem" }}>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={() => void onEnqueueProcessPendingDocuments()}
+            disabled={docBusy || listBusy}
+          >
+            문서 처리 Job 생성
+          </Button>
+        </div>
+        {docJobId != null && docJobId !== "" && (
+          <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
+            마지막 생성 job_id: <code>{docJobId}</code>
+          </p>
+        )}
+        {docMsg != null && docMsg !== "" && (
+          <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
+            {docMsg}
           </p>
         )}
       </SectionCard>

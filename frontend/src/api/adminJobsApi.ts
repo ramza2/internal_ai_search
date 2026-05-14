@@ -9,6 +9,8 @@ import type {
   AdminJobsListParams,
   AdminProcessPendingTextJobRequest,
   AdminProcessPendingTextJobResponse,
+  AdminProcessPendingDocumentsJobRequest,
+  AdminProcessPendingDocumentsJobResponse,
   AdminSyncTreeJobRequest,
   AdminSyncTreeJobResponse,
   AdminTestEnqueueBody,
@@ -53,6 +55,16 @@ export async function postAdminProcessPendingTextJob(
 ): Promise<AdminProcessPendingTextJobResponse> {
   const { data } = await httpClient.post<AdminProcessPendingTextJobResponse>(
     "/api/admin/jobs/process-pending-text",
+    body
+  );
+  return data;
+}
+
+export async function postAdminProcessPendingDocumentsJob(
+  body: AdminProcessPendingDocumentsJobRequest
+): Promise<AdminProcessPendingDocumentsJobResponse> {
+  const { data } = await httpClient.post<AdminProcessPendingDocumentsJobResponse>(
+    "/api/admin/jobs/process-pending-documents",
     body
   );
   return data;

@@ -13,6 +13,9 @@ from typing import Any
 from app.core.config import settings
 from app.services import scan_jobs_service
 from app.services.file_recursive_sync_service import run_webdav_recursive_sync_core
+from app.services.pending_document_processor_service import (
+    run_process_pending_documents_core,
+)
 from app.services.pending_text_processor_service import run_process_pending_text_core
 from app.workers.worker_types import WorkerJob, WorkerRunResult
 
@@ -159,6 +162,45 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
         pl = core.payload
         ok = str(pl.get("status") or "").lower() == "ok"
         msg = str(pl.get("message") or ("Finished" if ok else "Process-pending-text failed"))
+        return WorkerRunResult(
+            success=ok,
+            message=msg,
+            finalized_by_handler=core.finalized_scan_job,
+        )
+
+    if job.job_type == scan_jobs_service.JOB_TYPE_PROCESS_PENDING_DOCUMENTS:
+        if job.data_source_id is None:
+            return WorkerRunResult(
+                success=False,
+                message="PROCESS_PENDING_DOCUMENTS job is missing data_source_id",
+            )
+        p = params or {}
+        limit = _coerce_int(p.get("limit"), 50, lo=1, hi=5000)
+        max_bytes = _coerce_int(
+            p.get("max_file_size_bytes"),
+            52_428_800,
+            lo=1,
+            hi=100 * 1024 * 1024,
+        )
+        inc_raw = _coerce_str(p.get("include_extensions"))
+        reprocess_skipped = bool(p.get("reprocess_skipped", False))
+        wid = (settings.worker_id or "local-worker-1").strip()[:100]
+
+        core = run_process_pending_documents_core(
+            settings,
+            job.data_source_id,
+            limit=limit,
+            max_file_size_bytes=max_bytes,
+            include_extensions=inc_raw,
+            reprocess_skipped=reprocess_skipped,
+            scan_job_id=job.id,
+            requested_by=job.requested_by,
+            cancel_check=lambda: scan_jobs_service.is_cancel_requested(job.id),
+            heartbeat_worker_id=wid,
+        )
+        pl = core.payload
+        ok = str(pl.get("status") or "").lower() == "ok"
+        msg = str(pl.get("message") or ("Finished" if ok else "Process-pending-documents failed"))
         return WorkerRunResult(
             success=ok,
             message=msg,

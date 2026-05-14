@@ -158,6 +158,35 @@ class AdminProcessPendingTextJobResponse(BaseModel):
     message: str = "Process-pending-text job queued successfully"
 
 
+PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS = "pdf,docx,xlsx,pptx,hwpx"
+
+
+class AdminProcessPendingDocumentsJobRequest(BaseModel):
+    """Body for ``POST /api/admin/jobs/process-pending-documents`` (worker queue)."""
+
+    data_source_id: UUID
+    limit: int = Field(default=50, ge=1, le=5000)
+    max_file_size_bytes: int = Field(default=52_428_800, ge=1, le=100 * 1024 * 1024)
+    include_extensions: str | None = Field(default=None, max_length=2000)
+    reprocess_skipped: bool = False
+    priority: int = 0
+
+    @field_validator("include_extensions", mode="before")
+    @classmethod
+    def normalize_include_extensions_doc(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s or None
+
+
+class AdminProcessPendingDocumentsJobResponse(BaseModel):
+    status: str = "ok"
+    job_id: UUID
+    job_type: str = "PROCESS_PENDING_DOCUMENTS"
+    message: str = "Process-pending-documents job queued successfully"
+
+
 class AdminJobCancelRequest(BaseModel):
     """Optional body for ``POST /api/admin/jobs/{job_id}/cancel``."""
 
@@ -182,6 +211,9 @@ __all__ = [
     "AdminJobListResponse",
     "AdminProcessPendingTextJobRequest",
     "AdminProcessPendingTextJobResponse",
+    "AdminProcessPendingDocumentsJobRequest",
+    "AdminProcessPendingDocumentsJobResponse",
+    "PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS",
     "AdminSyncTreeJobRequest",
     "AdminSyncTreeJobResponse",
     "AdminTestEnqueueRequest",

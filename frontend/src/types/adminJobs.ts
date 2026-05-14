@@ -133,6 +133,24 @@ export type AdminProcessPendingTextJobResponse = {
   message: string;
 };
 
+export const PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS = "pdf,docx,xlsx,pptx,hwpx";
+
+export type AdminProcessPendingDocumentsJobRequest = {
+  data_source_id: string;
+  limit?: number;
+  max_file_size_bytes?: number;
+  include_extensions?: string | null;
+  reprocess_skipped?: boolean;
+  priority?: number;
+};
+
+export type AdminProcessPendingDocumentsJobResponse = {
+  status: string;
+  job_id: string;
+  job_type: string;
+  message: string;
+};
+
 /** POST /api/admin/jobs/{job_id}/cancel */
 export type AdminJobCancelRequest = {
   reason?: string | null;
