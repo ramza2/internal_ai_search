@@ -12,6 +12,7 @@ import type {
   DataSource,
   DataSourceCreateBody,
   DataSourceListResponse,
+  DataSourceUpdateBody,
 } from "@/types/dataSource";
 
 export async function listDataSources(
@@ -27,6 +28,14 @@ export async function createDataSource(
   body: DataSourceCreateBody
 ): Promise<DataSource> {
   const { data } = await httpClient.post<DataSource>("/api/data-sources", body);
+  return data;
+}
+
+export async function updateDataSource(
+  id: string,
+  body: DataSourceUpdateBody
+): Promise<DataSource> {
+  const { data } = await httpClient.put<DataSource>(`/api/data-sources/${id}`, body);
   return data;
 }
 

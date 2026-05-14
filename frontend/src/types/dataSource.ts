@@ -23,6 +23,7 @@ export interface DataSource {
   last_scan_at: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  warnings?: string[] | null;
 }
 
 export interface DataSourceListResponse {
@@ -34,6 +35,18 @@ export interface DataSourceCreateBody {
   name: string;
   source_type: SourceType | string;
   server_url: string;
+  webdav_root_path?: string | null;
+  username?: string | null;
+  credential_secret?: string | null;
+  description?: string | null;
+  is_active?: boolean;
+}
+
+/** `PUT /api/data-sources/{id}` — 생략한 필드는 서버에서 기존 값 유지 */
+export interface DataSourceUpdateBody {
+  name?: string;
+  source_type?: SourceType | string;
+  server_url?: string;
   webdav_root_path?: string | null;
   username?: string | null;
   credential_secret?: string | null;

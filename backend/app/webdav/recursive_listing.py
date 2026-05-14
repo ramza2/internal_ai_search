@@ -220,8 +220,14 @@ def collect_tree(
     third element and the caller treats it as a request-level error. Per-
     folder failures during traversal increment ``counters.failed_count``
     and are surfaced via ``counters.failed_paths``.
+
+    ``base_url`` has no trailing slash so ``base_url + encoded`` never
+    inserts ``//`` between the WebDAV root and the first path segment; a
+    double slash breaks Depth:1 parsing (``href`` prefixes no longer match
+    ``root_prefix``) so subfolders would appear empty even when ``max_depth``
+    allows deeper walks.
     """
-    base_url = join_webdav_url(server_url, webdav_root_path)
+    base_url = join_webdav_url(server_url, webdav_root_path).rstrip("/")
     start_rel = _canonical_rel(start_path or "/")
 
     counters = ScanCounters()
