@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.auth_dependencies import CurrentUserContext, require_admin_user
 from app.schemas.admin_jobs import (
+    AdminJobCancelResponse,
     AdminSyncTreeJobRequest,
     AdminSyncTreeJobResponse,
     AdminTestEnqueueRequest,
@@ -146,6 +147,68 @@ def admin_enqueue_sync_tree_job(
             },
         )
     payload = AdminSyncTreeJobResponse(job_id=jid)
+    return JSONResponse(status_code=200, content=payload.model_dump(mode="json"))
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=None)
+async def admin_cancel_job(
+    job_id: UUID,
+    request: Request,
+    ctx: CurrentUserContext = Depends(require_admin_user),
+) -> JSONResponse:
+    """Cancel a **PENDING** job immediately or request cancel on **RUNNING** (→ ``CANCELLING``)."""
+    reason: str | None = None
+    try:
+        raw = await request.json()
+        if isinstance(raw, dict) and raw.get("reason") is not None:
+            r = str(raw.get("reason")).strip()
+            reason = r[:500] if r else None
+    except Exception:
+        pass
+
+    res = scan_jobs_service.request_job_cancel(job_id=job_id, reason=reason)
+    outcome = str(res.get("result") or "")
+    prev = res.get("previous_status")
+    after = res.get("status_after")
+    msg = str(res.get("message") or "")
+
+    log_ok = outcome in ("ok", "noop_cancelling")
+    write_action_log_safe(
+        user_id=ctx.id,
+        action_type="JOB_CANCEL_REQUEST",
+        result="SUCCESS" if log_ok else "FAIL",
+        request=request,
+        detail={
+            "job_id": str(job_id),
+            "previous_status": prev,
+            "status_after": after,
+            "has_reason": bool((reason or "").strip()),
+        },
+        error_message=None if log_ok else msg,
+    )
+
+    if outcome == "not_found":
+        return JSONResponse(
+            status_code=404,
+            content={"status": "error", "message": "Job not found"},
+        )
+    if outcome == "scan_jobs_missing":
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "message": "scan_jobs table is not available"},
+        )
+    if outcome == "db_error":
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": msg or "Failed to cancel job"},
+        )
+    if outcome == "terminal":
+        return JSONResponse(
+            status_code=409,
+            content={"status": "error", "message": msg},
+        )
+
+    payload = AdminJobCancelResponse(job_id=job_id, status_after=str(after or ""), message=msg)
     return JSONResponse(status_code=200, content=payload.model_dump(mode="json"))
 
 

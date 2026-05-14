@@ -93,7 +93,8 @@ _JOB_SELECT_CORE = """
         CASE
             WHEN sj.started_at IS NOT NULL AND sj.finished_at IS NOT NULL THEN
                 EXTRACT(EPOCH FROM (sj.finished_at - sj.started_at)) * 1000
-            WHEN sj.started_at IS NOT NULL AND sj.status::text = 'RUNNING' THEN
+            WHEN sj.started_at IS NOT NULL AND sj.finished_at IS NULL
+                 AND sj.status::text IN ('RUNNING', 'CANCELLING') THEN
                 EXTRACT(EPOCH FROM (NOW() - sj.started_at)) * 1000
             ELSE NULL
         END

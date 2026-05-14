@@ -8,6 +8,7 @@ import {
   Badge,
   Button,
   CollapsiblePanel,
+  ConfirmDialog,
   DataTable,
   FilterBar,
   FilterField,
@@ -46,6 +47,9 @@ const JOB_TYPE_FILTER_CODES = [
 ] as const;
 
 const LIMIT_OPTIONS = [20, 50, 100] as const;
+
+/** Client-side stale hint only; align with backend stale policy later (TODO). */
+const STALE_HEARTBEAT_MS = 30 * 60 * 1000;
 
 type Draft = {
   status: string;
@@ -93,6 +97,18 @@ function dashNum(v: number | null | undefined): string {
   return String(v);
 }
 
+function isHeartbeatStale(heartbeatAt: string | null | undefined): boolean {
+  if (!heartbeatAt) return false;
+  const t = new Date(heartbeatAt).getTime();
+  if (Number.isNaN(t)) return false;
+  return Date.now() - t > STALE_HEARTBEAT_MS;
+}
+
+function canShowJobCancelButton(status: string | undefined): boolean {
+  const u = (status || "").toUpperCase();
+  return u === "PENDING" || u === "RUNNING" || u === "CANCELLING";
+}
+
 export function AdminJobsPage() {
   const { items: dataSources } = useDataSources(true);
   const [draft, setDraft] = useState<Draft>(emptyDraft);
@@ -131,6 +147,10 @@ export function AdminJobsPage() {
   const [failures, setFailures] = useState<AdminJobFailuresResponse | null>(null);
   const [failuresBusy, setFailuresBusy] = useState(false);
   const [failuresErr, setFailuresErr] = useState("");
+
+  const [cancelConfirmJob, setCancelConfirmJob] = useState<AdminJob | null>(null);
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const [cancelFeedback, setCancelFeedback] = useState<string | null>(null);
 
   const fetchList = useCallback(async () => {
     setListBusy(true);
@@ -273,15 +293,62 @@ export function AdminJobsPage() {
     setFailuresErr("");
   }
 
+  async function reloadDetailFor(jobId: string) {
+    setDetailBusy(true);
+    setDetailErr("");
+    try {
+      const d = await adminJobsApi.getAdminJob(jobId);
+      setDetail(d);
+    } catch (e) {
+      setDetailErr(getApiErrorMessage(e));
+    } finally {
+      setDetailBusy(false);
+    }
+    setFailuresBusy(true);
+    setFailuresErr("");
+    try {
+      const f = await adminJobsApi.getAdminJobFailures(jobId, { limit: 100, offset: 0 });
+      setFailures(f);
+    } catch (e) {
+      setFailuresErr(getApiErrorMessage(e));
+    } finally {
+      setFailuresBusy(false);
+    }
+  }
+
+  async function confirmCancelJob() {
+    if (!cancelConfirmJob || cancelBusy) return;
+    const jid = cancelConfirmJob.id;
+    setCancelBusy(true);
+    setCancelFeedback(null);
+    try {
+      const res = await adminJobsApi.cancelAdminJob(jid);
+      setCancelFeedback(res.message);
+      setCancelConfirmJob(null);
+      await fetchList();
+      if (modalJobId === jid) await reloadDetailFor(jid);
+    } catch (e) {
+      setCancelFeedback(getApiErrorMessage(e));
+      setCancelConfirmJob(null);
+    } finally {
+      setCancelBusy(false);
+    }
+  }
+
   if (loading && items.length === 0) return <Loading />;
 
   return (
     <div>
       <PageHeader
         title="작업 목록"
-        description="WebDAV 동기화, 텍스트 처리, 문서 처리, Chunk, Embedding 작업 이력을 확인합니다. (조회 전용 — 취소·재시도는 백그라운드 worker 도입 후 예정)"
+        description="WebDAV 동기화, 텍스트 처리, 문서 처리, Chunk, Embedding 작업 이력을 확인합니다. PENDING·RUNNING·CANCELLING 작업은 취소 요청이 가능하며, RUNNING은 다음 안전 지점에서 중단됩니다."
       />
       <ErrorMessage message={error} />
+      {cancelFeedback != null && cancelFeedback !== "" && (
+        <p className="muted" style={{ marginTop: "0.25rem", fontSize: "0.9rem" }}>
+          {cancelFeedback}
+        </p>
+      )}
 
       {warnings.length > 0 && (
         <div className="alert alertInfo" style={{ marginBottom: "0.75rem" }}>
@@ -597,7 +664,7 @@ export function AdminJobsPage() {
                   <th>진행</th>
                   <th>완료/실패/스킵/삭제</th>
                   <th>오류 요약</th>
-                  <th style={{ width: "6rem" }} />
+                  <th style={{ minWidth: "7rem" }}>작업</th>
                 </tr>
               </thead>
               <tbody>
@@ -610,7 +677,12 @@ export function AdminJobsPage() {
                       </div>
                     </td>
                     <td>
-                      <Badge variant={getJobStatusBadgeVariant(j.status)}>{j.status}</Badge>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", alignItems: "center" }}>
+                        <Badge variant={getJobStatusBadgeVariant(j.status)}>{j.status}</Badge>
+                        {j.status?.toUpperCase() === "RUNNING" && isHeartbeatStale(j.heartbeat_at) && (
+                          <Badge variant="neutral">heartbeat 지연</Badge>
+                        )}
+                      </div>
                     </td>
                     <td>{j.data_source_name ?? "—"}</td>
                     <td style={{ fontSize: "0.85rem" }}>{dashNum(j.priority)}</td>
@@ -649,9 +721,26 @@ export function AdminJobsPage() {
                       {errSnippet(j.error_message, 100)}
                     </td>
                     <td>
-                      <Button type="button" variant="ghost" size="sm" onClick={() => void openDetail(j.id)} disabled={listBusy}>
-                        상세
-                      </Button>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", alignItems: "stretch" }}>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => void openDetail(j.id)} disabled={listBusy}>
+                          상세
+                        </Button>
+                        {canShowJobCancelButton(j.status) && (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled={listBusy || cancelBusy || j.status?.toUpperCase() === "CANCELLING"}
+                            onClick={() => setCancelConfirmJob(j)}
+                          >
+                            {j.status?.toUpperCase() === "CANCELLING"
+                              ? "취소 요청 중"
+                              : j.status?.toUpperCase() === "PENDING"
+                                ? "취소"
+                                : "취소 요청"}
+                          </Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -673,9 +762,27 @@ export function AdminJobsPage() {
             <SectionCard
               title="작업 상세"
               actions={
-                <Button type="button" variant="ghost" size="sm" onClick={closeDetail}>
-                  닫기
-                </Button>
+                <Fragment>
+                  {detail && canShowJobCancelButton(detail.job.status) && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      style={{ marginRight: "0.5rem" }}
+                      disabled={detailBusy || cancelBusy || detail.job.status?.toUpperCase() === "CANCELLING"}
+                      onClick={() => setCancelConfirmJob(detail.job)}
+                    >
+                      {detail.job.status?.toUpperCase() === "CANCELLING"
+                        ? "취소 요청 중"
+                        : detail.job.status?.toUpperCase() === "PENDING"
+                          ? "취소"
+                          : "취소 요청"}
+                    </Button>
+                  )}
+                  <Button type="button" variant="ghost" size="sm" onClick={closeDetail}>
+                    닫기
+                  </Button>
+                </Fragment>
               }
             >
               {detailBusy && <p className="muted">불러오는 중…</p>}
@@ -690,8 +797,13 @@ export function AdminJobsPage() {
                     </div>
                   )}
                   <div className="muted" style={{ fontSize: "0.85rem", marginBottom: "0.5rem" }}>
-                    <Badge variant={getJobStatusBadgeVariant(detail.job.status)}>{detail.job.status}</Badge> ·{" "}
-                    {getJobTypeLabel(detail.job.job_type)}{" "}
+                    <span style={{ display: "inline-flex", flexWrap: "wrap", gap: "0.35rem", alignItems: "center" }}>
+                      <Badge variant={getJobStatusBadgeVariant(detail.job.status)}>{detail.job.status}</Badge>
+                      {detail.job.status?.toUpperCase() === "RUNNING" && isHeartbeatStale(detail.job.heartbeat_at) && (
+                        <Badge variant="neutral">heartbeat 지연</Badge>
+                      )}
+                    </span>{" "}
+                    · {getJobTypeLabel(detail.job.job_type)}{" "}
                     <span className="muted" style={{ fontSize: "0.8rem" }}>
                       ({detail.job.job_type})
                     </span>{" "}
@@ -811,6 +923,19 @@ export function AdminJobsPage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={cancelConfirmJob !== null}
+        title="작업 취소"
+        message="이 작업에 취소 요청을 보냅니다. 실행 중인 작업은 다음 안전 지점에서 중단됩니다. 계속하시겠습니까?"
+        confirmLabel="확인"
+        cancelLabel="닫기"
+        danger
+        onCancel={() => {
+          if (!cancelBusy) setCancelConfirmJob(null);
+        }}
+        onConfirm={() => void confirmCancelJob()}
+      />
     </div>
   );
 }

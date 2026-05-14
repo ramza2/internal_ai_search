@@ -1,5 +1,7 @@
 import { httpClient } from "@/api/httpClient";
 import type {
+  AdminJobCancelRequest,
+  AdminJobCancelResponse,
   AdminJobDetailResponse,
   AdminJobFailuresResponse,
   AdminJobListResponse,
@@ -40,5 +42,18 @@ export async function postAdminTestEnqueue(body: AdminTestEnqueueBody): Promise<
 /** Queue a real WEBDAV_SYNC_TREE PENDING job for the DB worker. */
 export async function postAdminSyncTreeJob(body: AdminSyncTreeJobRequest): Promise<AdminSyncTreeJobResponse> {
   const { data } = await httpClient.post<AdminSyncTreeJobResponse>("/api/admin/jobs/sync-tree", body);
+  return data;
+}
+
+/** Request cancel on a PENDING (immediate) or RUNNING (→ CANCELLING) job. */
+export async function cancelAdminJob(
+  jobId: string,
+  body?: AdminJobCancelRequest
+): Promise<AdminJobCancelResponse> {
+  const payload =
+    body && (body.reason !== undefined && body.reason !== null && String(body.reason).trim() !== "")
+      ? { reason: String(body.reason).trim() }
+      : {};
+  const { data } = await httpClient.post<AdminJobCancelResponse>(`/api/admin/jobs/${jobId}/cancel`, payload);
   return data;
 }

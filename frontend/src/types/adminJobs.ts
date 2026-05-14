@@ -117,3 +117,15 @@ export type AdminSyncTreeJobResponse = {
   job_type: string;
   message: string;
 };
+
+/** POST /api/admin/jobs/{job_id}/cancel */
+export type AdminJobCancelRequest = {
+  reason?: string | null;
+};
+
+export type AdminJobCancelResponse = {
+  status: string;
+  job_id: string;
+  status_after: string;
+  message: string;
+};

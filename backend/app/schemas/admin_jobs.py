@@ -128,11 +128,26 @@ class AdminSyncTreeJobResponse(BaseModel):
     message: str = "Sync-tree job queued successfully"
 
 
+class AdminJobCancelRequest(BaseModel):
+    """Optional body for ``POST /api/admin/jobs/{job_id}/cancel``."""
+
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class AdminJobCancelResponse(BaseModel):
+    status: str = "ok"
+    job_id: UUID
+    status_after: str
+    message: str
+
+
 __all__ = [
     "AdminJobDetailResponse",
     "AdminJobErrorResponse",
     "AdminJobFailureItem",
     "AdminJobFailuresResponse",
+    "AdminJobCancelRequest",
+    "AdminJobCancelResponse",
     "AdminJobItem",
     "AdminJobListResponse",
     "AdminSyncTreeJobRequest",

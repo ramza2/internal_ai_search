@@ -24,6 +24,7 @@ from uuid import UUID
 if TYPE_CHECKING:
     from app.workers.worker_types import WorkerJob
 
+import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
@@ -264,18 +265,26 @@ def update_scan_job_progress(
 
 
 def is_cancel_requested(job_id: UUID) -> bool:
-    """Return ``cancel_requested`` for ``job_id``; ``False`` on any error."""
+    """True when ``cancel_requested`` or status is ``CANCELLING`` (admin cancel path)."""
     try:
         with get_db_connection() as conn:
             conn.row_factory = dict_row
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT cancel_requested FROM scan_jobs WHERE id = %s",
+                    """
+                    SELECT
+                        COALESCE(cancel_requested, false) AS cancel_requested,
+                        status::text AS status
+                    FROM scan_jobs
+                    WHERE id = %s
+                    """,
                     (job_id,),
                 )
                 row = cur.fetchone()
         if not row:
             return False
+        if str(row.get("status") or "").strip().upper() == "CANCELLING":
+            return True
         return bool(row.get("cancel_requested"))
     except Exception:
         return False
@@ -316,6 +325,7 @@ def dequeue_pending_job(
             SELECT id
             FROM scan_jobs
             WHERE status = 'PENDING'::scan_job_status
+              AND NOT COALESCE(cancel_requested, false)
             ORDER BY priority DESC, created_at ASC NULLS LAST
             FOR UPDATE SKIP LOCKED
             LIMIT 1
@@ -415,12 +425,13 @@ def mark_job_failed(job_id: UUID, error_message: str) -> None:
 
 
 def mark_job_cancelled(job_id: UUID, message: str | None = None) -> None:
-    """Mark ``CANCELLED`` (worker-side cancel flow; no cancel API in this milestone)."""
+    """Mark ``CANCELLED`` after worker observes cancel (or admin immediate PENDING cancel)."""
     raw = (message or "").strip() or "Job cancelled"
     err_clean = _truncate_error_message(raw) or "Job cancelled"
     stmt = """
         UPDATE scan_jobs
         SET status = 'CANCELLED'::scan_job_status,
+            cancel_requested = TRUE,
             finished_at = NOW(),
             updated_at = NOW(),
             error_message = %s
@@ -435,6 +446,218 @@ def mark_job_cancelled(job_id: UUID, message: str | None = None) -> None:
         pass
 
 
+def get_scan_job_status(job_id: UUID) -> tuple[str | None, str]:
+    """Return ``(status_upper, err)`` where ``err`` is ``''``, ``'not_found'``, ``'scan_jobs_missing'``, or ``'db_error'``."""
+    try:
+        with get_db_connection() as conn:
+            conn.row_factory = dict_row
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status::text AS status FROM scan_jobs WHERE id = %s",
+                    (job_id,),
+                )
+                row = cur.fetchone()
+    except psycopg.errors.UndefinedTable:
+        return None, "scan_jobs_missing"
+    except Exception:
+        return None, "db_error"
+    if not row:
+        return None, "not_found"
+    st = str(row.get("status") or "").strip().upper()
+    return st, ""
+
+
+def cancel_pending_job(job_id: UUID, reason: str | None = None) -> None:
+    """Immediately cancel a ``PENDING`` row (no worker involvement)."""
+    msg = _truncate_error_message(reason) or "Job cancelled before execution"
+    stmt = """
+        UPDATE scan_jobs
+        SET status = 'CANCELLED'::scan_job_status,
+            cancel_requested = TRUE,
+            finished_at = NOW(),
+            updated_at = NOW(),
+            error_message = %s
+        WHERE id = %s AND status = 'PENDING'::scan_job_status
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(stmt, (msg, job_id))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def mark_job_cancelling(job_id: UUID, reason: str | None = None) -> None:
+    """Set ``CANCELLING`` + ``cancel_requested`` for an in-flight ``RUNNING`` job."""
+    msg = _truncate_error_message(reason) or "Cancel requested by administrator"
+    stmt = """
+        UPDATE scan_jobs
+        SET status = 'CANCELLING'::scan_job_status,
+            cancel_requested = TRUE,
+            updated_at = NOW(),
+            error_message = %s
+        WHERE id = %s AND status = 'RUNNING'::scan_job_status
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(stmt, (msg, job_id))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def request_job_cancel(*, job_id: UUID, reason: str | None = None) -> dict[str, Any]:
+    """Apply admin cancel policy; returns a dict for the HTTP layer.
+
+    Keys: ``result`` ∈ ``ok`` | ``not_found`` | ``terminal`` | ``scan_jobs_missing`` |
+    ``db_error`` | ``noop_cancelling``, ``previous_status``, ``status_after``, ``message``.
+    """
+    try:
+        with get_db_connection() as conn:
+            conn.row_factory = dict_row
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status::text AS status FROM scan_jobs WHERE id = %s FOR UPDATE",
+                    (job_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    conn.rollback()
+                    return {
+                        "result": "not_found",
+                        "previous_status": None,
+                        "status_after": None,
+                        "message": "Job not found",
+                    }
+                st = str(row.get("status") or "").strip().upper()
+
+                if st in ("COMPLETED", "FAILED", "CANCELLED", "PARTIAL"):
+                    conn.rollback()
+                    return {
+                        "result": "terminal",
+                        "previous_status": st,
+                        "status_after": st,
+                        "message": "Only PENDING or RUNNING jobs can be cancelled",
+                    }
+
+                if st == "CANCELLING":
+                    conn.rollback()
+                    return {
+                        "result": "noop_cancelling",
+                        "previous_status": "CANCELLING",
+                        "status_after": "CANCELLING",
+                        "message": "Cancel request is already pending",
+                    }
+
+                if st == "PENDING":
+                    msg = _truncate_error_message(reason) or "Job cancelled before execution"
+                    cur.execute(
+                        """
+                        UPDATE scan_jobs
+                        SET status = 'CANCELLED'::scan_job_status,
+                            cancel_requested = TRUE,
+                            finished_at = NOW(),
+                            updated_at = NOW(),
+                            error_message = %s
+                        WHERE id = %s AND status = 'PENDING'::scan_job_status
+                        """,
+                        (msg, job_id),
+                    )
+                    conn.commit()
+                    return {
+                        "result": "ok",
+                        "previous_status": "PENDING",
+                        "status_after": "CANCELLED",
+                        "message": "Pending job cancelled successfully",
+                    }
+
+                if st == "RUNNING":
+                    msg = _truncate_error_message(reason) or "Cancel requested by administrator"
+                    cur.execute(
+                        """
+                        UPDATE scan_jobs
+                        SET status = 'CANCELLING'::scan_job_status,
+                            cancel_requested = TRUE,
+                            updated_at = NOW(),
+                            error_message = %s
+                        WHERE id = %s AND status = 'RUNNING'::scan_job_status
+                        """,
+                        (msg, job_id),
+                    )
+                    conn.commit()
+                    return {
+                        "result": "ok",
+                        "previous_status": "RUNNING",
+                        "status_after": "CANCELLING",
+                        "message": "Cancel request submitted",
+                    }
+
+                conn.rollback()
+                return {
+                    "result": "terminal",
+                    "previous_status": st,
+                    "status_after": st,
+                    "message": "Only PENDING or RUNNING jobs can be cancelled",
+                }
+    except psycopg.errors.UndefinedTable:
+        return {
+            "result": "scan_jobs_missing",
+            "previous_status": None,
+            "status_after": None,
+            "message": "scan_jobs table is not available",
+        }
+    except Exception:
+        return {
+            "result": "db_error",
+            "previous_status": None,
+            "status_after": None,
+            "message": "Failed to cancel job",
+        }
+
+
+def mark_stale_running_jobs(
+    *,
+    stale_timeout_minutes: int,
+    worker_id: str | None = None,
+) -> int:
+    """Mark ``RUNNING`` jobs with stale heartbeat as ``FAILED`` (no auto-retry yet).
+
+    ``worker_id`` is reserved for future attribution when reassigning work.
+    Aggressive timeouts can fail legitimately long ``collect_tree`` phases — tune
+    ``WORKER_STALE_TIMEOUT_MINUTES`` carefully (see README).
+    """
+    _ = worker_id  # reserved — retry_count bump intentionally skipped until retry policy exists
+    mins = max(1, int(stale_timeout_minutes))
+    stale_msg = "Job marked as failed because worker heartbeat is stale"
+    msg = _truncate_error_message(stale_msg) or stale_msg
+    sql = """
+        UPDATE scan_jobs
+        SET status = 'FAILED'::scan_job_status,
+            finished_at = NOW(),
+            updated_at = NOW(),
+            error_message = %s
+        WHERE status = 'RUNNING'::scan_job_status
+          AND (
+                (heartbeat_at IS NOT NULL AND heartbeat_at < NOW() - (%s * INTERVAL '1 minute'))
+             OR (heartbeat_at IS NULL AND started_at IS NOT NULL
+                 AND started_at < NOW() - (%s * INTERVAL '1 minute'))
+             OR (heartbeat_at IS NULL AND started_at IS NULL
+                 AND updated_at < NOW() - (%s * INTERVAL '1 minute'))
+          )
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (msg, mins, mins, mins))
+                n = cur.rowcount
+            conn.commit()
+        return int(n or 0)
+    except Exception:
+        return 0
+
+
 def update_job_heartbeat(job_id: UUID, worker_id: str) -> None:
     """Best-effort heartbeat for ``RUNNING`` rows only."""
     wid = (worker_id or "").strip()[:100]
@@ -445,7 +668,8 @@ def update_job_heartbeat(job_id: UUID, worker_id: str) -> None:
         SET heartbeat_at = NOW(),
             updated_at = NOW(),
             worker_id = %s
-        WHERE id = %s AND status = 'RUNNING'::scan_job_status
+        WHERE id = %s
+          AND (status = 'RUNNING'::scan_job_status OR status = 'CANCELLING'::scan_job_status)
     """
     try:
         with get_db_connection() as conn:
@@ -606,15 +830,20 @@ __all__ = [
     "JOB_TYPE_WEBDAV_SYNC_ROOT",
     "JOB_TYPE_WEBDAV_SYNC_TREE",
     "KNOWN_JOB_TYPES",
+    "cancel_pending_job",
     "complete_scan_job",
     "create_scan_job",
     "dequeue_pending_job",
     "enqueue_scan_job",
     "fail_scan_job",
+    "get_scan_job_status",
     "is_cancel_requested",
     "mark_job_cancelled",
+    "mark_job_cancelling",
     "mark_job_completed",
     "mark_job_failed",
+    "mark_stale_running_jobs",
+    "request_job_cancel",
     "sanitize_job_params_for_response",
     "sanitize_job_params_for_storage",
     "update_job_heartbeat",

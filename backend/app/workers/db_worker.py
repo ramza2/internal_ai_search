@@ -34,6 +34,16 @@ class DBPollingWorker:
     def run_once(self) -> int:
         """Process up to ``max_jobs_per_loop`` jobs; returns number processed."""
         processed = 0
+        try:
+            n_stale = scan_jobs_service.mark_stale_running_jobs(
+                stale_timeout_minutes=self.stale_timeout_minutes,
+                worker_id=self.worker_id,
+            )
+            if n_stale:
+                logger.info("Marked %s stale RUNNING scan_jobs as FAILED", n_stale)
+        except Exception:  # pragma: no cover
+            logger.exception("mark_stale_running_jobs failed")
+
         for _ in range(self.max_jobs_per_loop):
             if self._stop:
                 break

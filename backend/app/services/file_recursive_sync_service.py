@@ -1,7 +1,9 @@
 """WebDAV recursive (BFS, Depth:1) sync — upsert ``files`` only.
 
 This service is the Step-10 entry point invoked by the
-``POST /api/data-sources/{id}/sync-tree`` route. It:
+``POST /api/data-sources/{id}/sync-tree`` route **and** by the DB polling
+worker for ``WEBDAV_SYNC_TREE`` jobs (via :func:`run_webdav_recursive_sync_core`
+with an existing ``scan_jobs`` row). It:
 
 1. Loads the data source row + decrypts the credential (server-side only).
 2. Loads the exclusion filter from ``exclusion_policies`` (best-effort).
@@ -30,7 +32,7 @@ transaction as the upserts; any failure rolls back the entire batch.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable, NamedTuple
 from uuid import UUID
 
 from psycopg.rows import dict_row
@@ -87,6 +89,15 @@ MAX_DEPTH_CEILING = 20
 MAX_ITEMS_CEILING = 50_000
 _FAILED_PATHS_LIMIT = 20
 _WARNINGS_LIMIT = 20
+_PROGRESS_HEARTBEAT_EVERY = 100
+
+
+class RecursiveSyncCoreOutcome(NamedTuple):
+    """Result of :func:`run_webdav_recursive_sync_core` (HTTP payload + status)."""
+
+    payload: dict[str, Any]
+    http_status: int
+    finalized_scan_job: bool
 
 
 def _clamp(value: int, lo: int, hi: int) -> int:
@@ -181,10 +192,34 @@ def _decide_deleted_detection(
     return (not skips), skips
 
 
-def run_webdav_recursive_sync(
+def _maybe_worker_heartbeat(
+    scan_job_id: UUID | None,
+    *,
+    heartbeat_worker_id: str | None,
+    processed: int,
+    current_path: str | None,
+) -> None:
+    """Best-effort progress + heartbeat for long worker runs.
+
+    Fine-grained per-folder heartbeats can be added later; see README.
+    """
+    if not scan_job_id:
+        return
+    if heartbeat_worker_id:
+        scan_jobs_service.update_job_heartbeat(scan_job_id, heartbeat_worker_id)
+    scan_jobs_service.update_scan_job_progress(
+        job_id=scan_job_id,
+        processed_files=processed,
+        current_file_path=current_path,
+        heartbeat=True,
+    )
+
+
+def run_webdav_recursive_sync_core(
     settings: Settings,
     ds_id: UUID,
     *,
+    scan_job_id: UUID | None,
     start_path: str,
     max_depth: int,
     max_items: int,
@@ -192,18 +227,21 @@ def run_webdav_recursive_sync(
     apply_exclusions: bool,
     detect_deleted: bool = False,
     requested_by: UUID | None = None,
-) -> tuple[dict[str, Any], int]:
-    """Run a bounded recursive BFS sync; return ``(payload, http_status_code)``.
+    cancel_check: Callable[[], bool] | None = None,
+    heartbeat_worker_id: str | None = None,
+) -> RecursiveSyncCoreOutcome:
+    """Execute recursive sync using an **existing** ``scan_jobs`` row.
 
-    Raises ``DataSourceNotFound`` when ``ds_id`` does not exist (the route
-    layer maps this to HTTP 404). Other failures are returned inline.
+    The synchronous HTTP route creates the row via ``create_scan_job`` then
+    calls this core. The DB worker dequeues a ``PENDING`` row (already
+    ``RUNNING``) and passes ``scan_job_id=job.id`` so no duplicate job rows are
+    created.
 
-    When ``detect_deleted`` is ``True`` and all safety conditions hold
-    (non-truncated, no failed folders, exclusions disabled, hidden items
-    included), rows that fall inside ``start_path``'s scope but were not
-    discovered during this walk are soft-marked
-    ``analysis_status = 'DELETED'`` in the same transaction.
+    Finalization uses ``complete_scan_job`` / ``fail_scan_job`` /
+    ``mark_job_cancelled`` — callers that delegate terminal state must set
+    ``WorkerRunResult.finalized_by_handler`` and avoid double-updates.
     """
+    _ = requested_by  # parity with sync entrypoint; job row carries requester
     row = datasource_svc.fetch_data_source_row_internal(ds_id=ds_id)
     source_type_str = str(row["source_type"]).strip().upper()
     base: dict[str, Any] = {
@@ -211,11 +249,6 @@ def run_webdav_recursive_sync(
         "name": row["name"],
         "source_type": source_type_str,
     }
-    scan_job_id = scan_jobs_service.create_scan_job(
-        ds_id=ds_id,
-        job_type=scan_jobs_service.JOB_TYPE_WEBDAV_SYNC_TREE,
-        requested_by=requested_by,
-    )
 
     md = _clamp(int(max_depth), 0, MAX_DEPTH_CEILING)
     mi = _clamp(int(max_items), 1, MAX_ITEMS_CEILING)
@@ -235,7 +268,7 @@ def run_webdav_recursive_sync(
         msg = "LOCAL_FOLDER recursive sync is not supported yet"
         _record_outcome_on_data_source(ds_id, False, msg)
         scan_jobs_service.fail_scan_job(job_id=scan_job_id, error_message=msg)
-        return (
+        return RecursiveSyncCoreOutcome(
             _error_payload(
                 base=base,
                 scan_job_id=scan_job_id,
@@ -243,6 +276,7 @@ def run_webdav_recursive_sync(
                 message=msg,
             ),
             400,
+            True,
         )
     if source_type_enum is None or source_type_enum not in WEBDAV_KINDS:
         msg = (
@@ -250,7 +284,7 @@ def run_webdav_recursive_sync(
         )
         _record_outcome_on_data_source(ds_id, False, msg)
         scan_jobs_service.fail_scan_job(job_id=scan_job_id, error_message=msg)
-        return (
+        return RecursiveSyncCoreOutcome(
             _error_payload(
                 base=base,
                 scan_job_id=scan_job_id,
@@ -258,6 +292,7 @@ def run_webdav_recursive_sync(
                 message=msg,
             ),
             400,
+            True,
         )
 
     uname_raw = row.get("username")
@@ -274,7 +309,7 @@ def run_webdav_recursive_sync(
         msg = "WebDAV username or credential is missing"
         _record_outcome_on_data_source(ds_id, False, msg)
         scan_jobs_service.fail_scan_job(job_id=scan_job_id, error_message=msg)
-        return (
+        return RecursiveSyncCoreOutcome(
             _error_payload(
                 base=base,
                 scan_job_id=scan_job_id,
@@ -282,6 +317,7 @@ def run_webdav_recursive_sync(
                 message=msg,
             ),
             400,
+            True,
         )
 
     try:
@@ -290,7 +326,7 @@ def run_webdav_recursive_sync(
         msg = "Failed to decrypt stored credential"
         _record_outcome_on_data_source(ds_id, False, msg)
         scan_jobs_service.fail_scan_job(job_id=scan_job_id, error_message=msg)
-        return (
+        return RecursiveSyncCoreOutcome(
             _error_payload(
                 base=base,
                 scan_job_id=scan_job_id,
@@ -298,6 +334,7 @@ def run_webdav_recursive_sync(
                 message=msg,
             ),
             400,
+            True,
         )
 
     server_url = (row["server_url"] or "").strip()
@@ -307,7 +344,7 @@ def run_webdav_recursive_sync(
         msg = "server_url must start with http:// or https://"
         _record_outcome_on_data_source(ds_id, False, msg)
         scan_jobs_service.fail_scan_job(job_id=scan_job_id, error_message=msg)
-        return (
+        return RecursiveSyncCoreOutcome(
             _error_payload(
                 base=base,
                 scan_job_id=scan_job_id,
@@ -315,6 +352,7 @@ def run_webdav_recursive_sync(
                 message=msg,
             ),
             400,
+            True,
         )
 
     wr_row = row.get("webdav_root_path")
@@ -325,7 +363,7 @@ def run_webdav_recursive_sync(
         msg = "webdav_root_path is required for WebDAV-based data sources"
         _record_outcome_on_data_source(ds_id, False, msg)
         scan_jobs_service.fail_scan_job(job_id=scan_job_id, error_message=msg)
-        return (
+        return RecursiveSyncCoreOutcome(
             _error_payload(
                 base=base,
                 scan_job_id=scan_job_id,
@@ -333,6 +371,24 @@ def run_webdav_recursive_sync(
                 message=msg,
             ),
             400,
+            True,
+        )
+
+    if scan_job_id and heartbeat_worker_id:
+        scan_jobs_service.update_job_heartbeat(scan_job_id, heartbeat_worker_id)
+    if cancel_check and scan_job_id and cancel_check():
+        scan_jobs_service.mark_job_cancelled(
+            scan_job_id, message="Job cancelled by request"
+        )
+        return RecursiveSyncCoreOutcome(
+            _error_payload(
+                base=base,
+                scan_job_id=scan_job_id,
+                request_summary=request_summary,
+                message="Job cancelled by request",
+            ),
+            200,
+            True,
         )
 
     exclusion_filter, policy_warnings = load_exclusion_filter(
@@ -352,6 +408,31 @@ def run_webdav_recursive_sync(
         timeout_seconds=float(settings.webdav_timeout_seconds),
         exclusion=exclusion_filter,
     )
+
+    if scan_job_id:
+        scan_jobs_service.update_scan_job_progress(
+            job_id=scan_job_id,
+            processed_files=0,
+            current_file_path=sp,
+            heartbeat=True,
+        )
+        if heartbeat_worker_id:
+            scan_jobs_service.update_job_heartbeat(scan_job_id, heartbeat_worker_id)
+
+    if cancel_check and scan_job_id and cancel_check():
+        scan_jobs_service.mark_job_cancelled(
+            scan_job_id, message="Job cancelled by request"
+        )
+        return RecursiveSyncCoreOutcome(
+            _error_payload(
+                base=base,
+                scan_job_id=scan_job_id,
+                request_summary=request_summary,
+                message="Job cancelled by request",
+            ),
+            200,
+            True,
+        )
 
     aggregated_warnings: list[str] = []
     for w in policy_warnings:
@@ -378,7 +459,7 @@ def run_webdav_recursive_sync(
         }
         if aggregated_warnings:
             extra["warnings"] = aggregated_warnings
-        return (
+        return RecursiveSyncCoreOutcome(
             _error_payload(
                 base=base,
                 scan_job_id=scan_job_id,
@@ -388,6 +469,7 @@ def run_webdav_recursive_sync(
                 extra=extra,
             ),
             200,
+            True,
         )
 
     # Decide whether deletion detection will run *before* opening the DB
@@ -428,9 +510,14 @@ def run_webdav_recursive_sync(
     try:
         with get_db_connection() as conn:
             conn.row_factory = dict_row
+            cancelled = False
             try:
                 with conn.cursor() as cur:
-                    for it in items:
+                    for idx, it in enumerate(items):
+                        if cancel_check and scan_job_id and (idx == 0 or (idx + 1) % 50 == 0):
+                            if cancel_check():
+                                cancelled = True
+                                break
                         is_dir = bool(it.get("is_directory"))
                         new_status = "SKIPPED" if is_dir else "PENDING"
                         cur.execute(
@@ -457,8 +544,18 @@ def run_webdav_recursive_sync(
                             dirs += 1
                         else:
                             files_cnt += 1
+                        proc = inserted + updated
+                        if scan_job_id and (idx + 1) % _PROGRESS_HEARTBEAT_EVERY == 0:
+                            _maybe_worker_heartbeat(
+                                scan_job_id,
+                                heartbeat_worker_id=heartbeat_worker_id,
+                                processed=proc,
+                                current_path=str(it.get("remote_path") or "") or None,
+                            )
 
-                    if should_detect_deleted:
+                    if cancelled:
+                        pass
+                    elif should_detect_deleted:
                         try:
                             deleted_marked_count = mark_deleted_within_scope(
                                 cur,
@@ -470,9 +567,26 @@ def run_webdav_recursive_sync(
                             deletion_marking_failed = True
                             raise
 
-                    cur.execute(
-                        UPDATE_DATA_SOURCE_SUCCESS_SQL,
-                        (truncate_message(final_msg), ds_id),
+                    if not cancelled:
+                        cur.execute(
+                            UPDATE_DATA_SOURCE_SUCCESS_SQL,
+                            (truncate_message(final_msg), ds_id),
+                        )
+                if cancelled:
+                    conn.rollback()
+                    if scan_job_id:
+                        scan_jobs_service.mark_job_cancelled(
+                            scan_job_id, message="Job cancelled by request"
+                        )
+                    return RecursiveSyncCoreOutcome(
+                        _error_payload(
+                            base=base,
+                            scan_job_id=scan_job_id,
+                            request_summary=request_summary,
+                            message="Job cancelled by request",
+                        ),
+                        200,
+                        True,
                     )
                 conn.commit()
             except Exception:
@@ -488,7 +602,7 @@ def run_webdav_recursive_sync(
             job_id=scan_job_id, error_message=fail_msg
         )
         _record_outcome_on_data_source(ds_id, False, fail_msg)
-        return (
+        return RecursiveSyncCoreOutcome(
             _error_payload(
                 base=base,
                 scan_job_id=scan_job_id,
@@ -502,6 +616,7 @@ def run_webdav_recursive_sync(
                 },
             ),
             500,
+            True,
         )
 
     processed = inserted + updated
@@ -516,6 +631,9 @@ def run_webdav_recursive_sync(
         details = _summarize_failed_paths(counters.failed_paths)
         if details:
             scan_jobs_error_summary += ": " + details
+
+    if scan_job_id and heartbeat_worker_id:
+        scan_jobs_service.update_job_heartbeat(scan_job_id, heartbeat_worker_id)
 
     scan_jobs_service.complete_scan_job(
         job_id=scan_job_id,
@@ -550,4 +668,39 @@ def run_webdav_recursive_sync(
     }
     if counters.failed_paths:
         response["failed_paths"] = counters.failed_paths[:_FAILED_PATHS_LIMIT]
-    return response, 200
+    return RecursiveSyncCoreOutcome(response, 200, True)
+
+
+def run_webdav_recursive_sync(
+    settings: Settings,
+    ds_id: UUID,
+    *,
+    start_path: str,
+    max_depth: int,
+    max_items: int,
+    include_hidden: bool,
+    apply_exclusions: bool,
+    detect_deleted: bool = False,
+    requested_by: UUID | None = None,
+) -> tuple[dict[str, Any], int]:
+    """Synchronous HTTP entry: create ``RUNNING`` scan job then run core logic."""
+    scan_job_id = scan_jobs_service.create_scan_job(
+        ds_id=ds_id,
+        job_type=scan_jobs_service.JOB_TYPE_WEBDAV_SYNC_TREE,
+        requested_by=requested_by,
+    )
+    out = run_webdav_recursive_sync_core(
+        settings,
+        ds_id,
+        scan_job_id=scan_job_id,
+        start_path=start_path,
+        max_depth=max_depth,
+        max_items=max_items,
+        include_hidden=include_hidden,
+        apply_exclusions=apply_exclusions,
+        detect_deleted=detect_deleted,
+        requested_by=requested_by,
+        cancel_check=None,
+        heartbeat_worker_id=None,
+    )
+    return out.payload, out.http_status
