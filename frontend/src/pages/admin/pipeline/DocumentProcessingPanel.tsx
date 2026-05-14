@@ -108,6 +108,8 @@ export type DocumentProcessingPanelProps = {
   onDocumentParamsSnapshot?: (p: DocumentPipelineFormSnapshot) => void;
   /** 파이프라인 전체 자동 실행 중에는 수동 실행 버튼 비활성화 */
   disableRunButtons?: boolean;
+  /** true이면 동기 `문서 처리 실행` 버튼을 숨깁니다(부모에서 백그라운드 Job 생성). dry_run 대상 확인은 유지 */
+  suppressDocumentRealRun?: boolean;
 };
 
 export function DocumentProcessingPanel({
@@ -120,6 +122,7 @@ export function DocumentProcessingPanel({
   onDocumentApiOutcome,
   onDocumentParamsSnapshot,
   disableRunButtons = false,
+  suppressDocumentRealRun = false,
 }: DocumentProcessingPanelProps) {
   const [limit, setLimit] = useState(50);
   const [maxBytes, setMaxBytes] = useState(52_428_800);
@@ -323,15 +326,17 @@ export function DocumentProcessingPanel({
         >
           대상 확인 (dry_run)
         </Button>
-        <Button
-          type="button"
-          variant="primary"
-          loading={busy}
-          disabled={disableRunButtons}
-          onClick={() => setConfirmRunOpen(true)}
-        >
-          문서 처리 실행
-        </Button>
+        {!suppressDocumentRealRun && (
+          <Button
+            type="button"
+            variant="primary"
+            loading={busy}
+            disabled={disableRunButtons}
+            onClick={() => setConfirmRunOpen(true)}
+          >
+            문서 처리 실행
+          </Button>
+        )}
       </div>
 
       <ErrorMessage message={processError} />
@@ -461,18 +466,20 @@ export function DocumentProcessingPanel({
         </div>
       )}
 
-      <ConfirmDialog
-        open={confirmRunOpen}
-        title="문서 처리 실행"
-        message="이 작업은 파일을 다운로드하거나 DB 상태를 변경할 수 있습니다. 계속하시겠습니까?"
-        confirmLabel="실행"
-        cancelLabel="취소"
-        onCancel={() => setConfirmRunOpen(false)}
-        onConfirm={() => {
-          setConfirmRunOpen(false);
-          void runProcess(false);
-        }}
-      />
+      {!suppressDocumentRealRun && (
+        <ConfirmDialog
+          open={confirmRunOpen}
+          title="문서 처리 실행"
+          message="이 작업은 파일을 다운로드하거나 DB 상태를 변경할 수 있습니다. 계속하시겠습니까?"
+          confirmLabel="실행"
+          cancelLabel="취소"
+          onCancel={() => setConfirmRunOpen(false)}
+          onConfirm={() => {
+            setConfirmRunOpen(false);
+            void runProcess(false);
+          }}
+        />
+      )}
     </>
   );
 }

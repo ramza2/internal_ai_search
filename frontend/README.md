@@ -44,10 +44,10 @@ Vite + React + TypeScript 기반 웹 UI. 백엔드(FastAPI)와 JWT 인증으로 
 - **작업 목록**은 `GET /api/admin/jobs`로 `scan_jobs`를 조회합니다. `PENDING` / `RUNNING` / `CANCELLING` / `COMPLETED` / `FAILED` / `CANCELLED` 등 상태는 배지(`getJobStatusBadgeVariant`)로 표시하고, **`worker_id`**, **`heartbeat_at`**, **`priority`**, **`job_params`**(목록·상세)를 확인할 수 있습니다.
 - **취소:** `POST /api/admin/jobs/{job_id}/cancel` — 목록·상세에서 **취소** / **취소 요청** / **취소 요청 중**(비활성) 버튼으로 호출합니다. **`PENDING`**은 즉시 **`CANCELLED`**로 끝나고, **`RUNNING`**은 **`CANCELLING`**으로 바뀐 뒤 worker가 **다음 안전 지점**에서 **`CANCELLED`**로 마무리합니다(동기 `sync-tree` API와 무관).
 - **Stale heartbeat 표시:** `RUNNING`이면서 **`heartbeat_at`**이 클라이언트 기준 **30분** 이상 지난 경우 **「heartbeat 지연」** 배지를 둘 수 있습니다. 실제 정리 기준은 백엔드 **`WORKER_STALE_TIMEOUT_MINUTES`**와 동일하게 맞추려면 추후 설정/환경 변수 연동이 필요합니다(TODO).
-- **백그라운드 텍스트 처리:** `POST /api/admin/jobs/process-pending-text`로 **PROCESS_PENDING_TEXT** 큐 Job 생성. **백그라운드 동기화**와 동일하게 worker 실행이 필요합니다. **PipelineRunModal**·데이터 소스의 동기 `process-pending-text`(dry_run 포함)와 병행 가능한 별도 경로입니다.
-- **백그라운드 문서 처리:** `POST /api/admin/jobs/process-pending-documents`로 **PROCESS_PENDING_DOCUMENTS** 큐 Job 생성. **DataSourcesPage**의 문서 처리 모달·**PipelineRunModal**의 동기 `process-pending-documents`(dry_run 포함)와 병행 가능합니다. worker(`python -m app.worker_main`)를 실행해야 **PENDING**이 처리됩니다. 문서 추출 후 검색/RAG에는 **Chunk 생성**과 **Embedding 생성**이 여전히 필요합니다.
-- **백그라운드 Chunk 생성:** `POST /api/admin/jobs/chunk-completed-text`로 **CHUNK_COMPLETED_TEXT** 큐 Job 생성. **PipelineRunModal**의 동기 `chunk-completed-text`(dry_run 포함)와 병행 가능합니다. worker 실행이 필요하며, 완료 후 검색/RAG에는 **Embedding 생성**(`embed-pending-chunks`)이 별도로 필요합니다.
-- **백그라운드 Embedding 생성:** `POST /api/admin/jobs/embed-pending-chunks`로 **EMBED_PENDING_CHUNKS** 큐 Job 생성. **PipelineRunModal**의 동기 `embed-pending-chunks`(dry_run 포함)와 병행 가능합니다. worker 실행이 필요하며, 완료 후 **`/search`**·**`/answer`** 등에 벡터가 반영됩니다.
+- **백그라운드 텍스트 처리:** `POST /api/admin/jobs/process-pending-text`로 **PROCESS_PENDING_TEXT** 큐 Job 생성. **백그라운드 동기화**와 동일하게 worker 실행이 필요합니다. **PipelineRunModal**(백그라운드 실행 모드)·`/admin/jobs`·데이터 소스의 동기 `process-pending-text`(dry_run 포함)와 병행 가능한 별도 경로입니다.
+- **백그라운드 문서 처리:** `POST /api/admin/jobs/process-pending-documents`로 **PROCESS_PENDING_DOCUMENTS** 큐 Job 생성. **PipelineRunModal**(백그라운드 실행 모드)·`/admin/jobs`·동기 `process-pending-documents`(dry_run 포함)와 병행 가능합니다. worker(`python -m app.worker_main`)를 실행해야 **PENDING**이 처리됩니다. 문서 추출 후 검색/RAG에는 **Chunk 생성**과 **Embedding 생성**이 여전히 필요합니다.
+- **백그라운드 Chunk 생성:** `POST /api/admin/jobs/chunk-completed-text`로 **CHUNK_COMPLETED_TEXT** 큐 Job 생성. **PipelineRunModal**(백그라운드 실행 모드)·`/admin/jobs`·동기 `chunk-completed-text`(dry_run 포함)와 병행 가능합니다. worker 실행이 필요하며, 완료 후 검색/RAG에는 **Embedding 생성**(`embed-pending-chunks`)이 별도로 필요합니다.
+- **백그라운드 Embedding 생성:** `POST /api/admin/jobs/embed-pending-chunks`로 **EMBED_PENDING_CHUNKS** 큐 Job 생성. **PipelineRunModal**(백그라운드 실행 모드)·`/admin/jobs`·동기 `embed-pending-chunks`(dry_run 포함)와 병행 가능합니다. worker 실행이 필요하며, 완료 후 **`/search`**·**`/answer`** 등에 벡터가 반영됩니다.
 - 긴 sync-tree 실행 중 **DB heartbeat**는 백엔드에서 일정 간격으로만 갱신합니다. **진행 중 세부 heartbeat(폴더 단위 등)는 다음 단계에서 보강**할 수 있습니다.
 - 화면 상단 **개발·검증용** 접이 패널에서 **테스트 Job 생성**을 누르면 `POST /api/admin/jobs/test-enqueue`를 호출합니다. **데이터 소스**는 현재 필터에 선택된 값이 있으면 그 UUID를 쓰고, 없으면 목록의 **첫 번째 데이터 소스**를 사용합니다. 둘 다 없으면 오류 메시지를 냅니다. **`fail_test`** 체크 시 의도적으로 실패하는 큐 행이 만들어집니다.
 - 별도 터미널에서 백엔드 디렉터리로 이동한 뒤 **`python -m app.worker_main`**을 실행하면 큐의 **`PENDING`** 작업이 **`RUNNING` → `COMPLETED`(또는 `fail_test` 시 `FAILED`)**로 바뀌는지 확인할 수 있습니다.
@@ -123,27 +123,31 @@ npm run preview
 - **PaginationBar** + API `total` 표시. 승인·역할 변경 등 작업 후 **현재 필터·offset**을 유지한 채 목록만 다시 불러옵니다.
 - **StatusBadge / RoleBadge**로 상태·역할 표시. 마지막 관리자 보호 등 API 오류는 **ErrorMessage**로 구분 표시(목록 로드 오류와 별도).
 
-## 문서 파일 처리 UI (`/admin/data-sources`)
+## 문서 파일 처리 UI (파이프라인 모달 Step 3)
 
-- 각 데이터 소스 행의 **문서 처리** → 모달 **문서 파일 처리**에서 `POST /api/data-sources/{id}/process-pending-documents`를 호출합니다(`src/api/dataSourceApi.ts`의 `processPendingDocuments`).
+- **데이터 소스** 목록에서는 **파이프라인 실행** 모달만 엽니다. 문서 추출 UI는 모달 **3. 문서 파일 처리** 단계에서 `DocumentProcessingPanel`을 그대로 사용합니다(`POST /api/data-sources/{id}/process-pending-documents`).
 - **지원 포맷:** PDF, DOCX, XLSX, PPTX, HWPX.
 - **미지원:** HWP, DOC, XLS, PPT.
 - **HWP Automation/COM 미사용**, HWPX는 ZIP/XML 기반(백엔드와 동일 정책). OCR 없음.
 - **dry_run:** 「대상 확인」으로 `dry_run=true` 호출 — 다운로드·DB 반영 없이 대상만 확인.
 - **reprocess_skipped:** 기존 `UNSUPPORTED_EXTENSION`으로 스킵된 지원 확장자 파일을 다시 처리할 때 사용.
-- 실제 추출 후 검색/RAG에는 **Chunk 생성**(`chunk-completed-text`)과 **Embedding**(`embed-pending-chunks`)이 필요합니다. 모달에서 성공 시 후속 실행 버튼을 제공합니다.
+- **백그라운드 실행** 모드에서는 동기 「문서 처리 실행」 버튼을 숨기고, 같은 폼으로 **문서 처리 Job 생성**(`POST /api/admin/jobs/process-pending-documents`)만 제공합니다. 실제 추출 후 검색/RAG에는 **Chunk 생성**과 **Embedding**이 필요합니다.
 
 ## 인덱싱 파이프라인 실행 UI (`/admin/data-sources`)
 
-- 각 데이터 소스 행의 **파이프라인 실행** → 오버레이 모달에서 다음 순서로 **수동** 또는 **권장 순서로 전체 자동** 실행할 수 있습니다: (1) `sync-tree` (2) `process-pending-text` (3) `process-pending-documents` — 공통 `DocumentProcessingPanel` 재사용 (4) `chunk-completed-text` (5) `embed-pending-chunks`.
-- **dry_run:** 텍스트·문서·Chunk·Embedding 단계의 **대상 확인** 버튼은 서버가 대상만 계산하고 DB/다운로드를 바꾸지 않는 호출입니다. **실제 실행**은 DB·파일 처리가 일어날 수 있으며 공통 확인 다이얼로그를 거칩니다. **sync-tree**는 dry_run이 없으므로 **동기화 실행** 전에 옵션을 확인하세요.
-- **권장 순서로 전체 실행:** 모달 상단 버튼으로 위 5단계를 **브라우저에서 순차 호출**합니다. 각 카드에 입력한 옵션(limit, 경로, 확장자 등)은 그대로 쓰이며, **자동 실행만 `dry_run=false`로 강제**됩니다(카드에 dry_run이 켜져 있어도 무시). 자동 실행 전에는 단계별 **대상 확인(dry_run)** 을 권장합니다.
-- **중간 실패:** 어느 단계든 HTTP 오류·예외·또는 응답 `status === "error"` 이면 그 단계는 `error`, 이후 단계는 `skipped` 로 표시하고 자동 실행을 중단합니다. 응답 `status === "partial"` 인 경우에는 경고 문구를 남기고 **다음 단계는 계속 진행**합니다(`failed_count`가 커도 동일).
-- **진행·소요 시간:** 자동 실행 중 상단에 완료 수·현재 단계·실패/건너뜀 수·프로그레스 바를 표시하고, 단계별 카드에 시작/종료 시각·`formatDuration(ms)` 기반 소요 시간(`950ms`, `3.2s`, `1m 12s` 등)을 표시합니다. 자동 실행이 끝나면 성공/실패 요약과 총 소요 시간을 보여 줍니다.
-- **실행 방식 한계:** 백그라운드 큐가 아니라 **탭이 열려 있는 동안의 순차 HTTP 요청**입니다. 대량 데이터는 이후 백그라운드 워커로 분리하는 것이 TODO입니다.
-- 단계별 응답은 각 카드 아래에 요약·경고·`items` 상위 20건(초과 시 안내 문구)으로 표시합니다. 상단 바에 마지막 실행 단계/결과·완료·실패 단계 수를 표시합니다.
+- 각 데이터 소스 행의 **파이프라인 실행** → 오버레이 **`PipelineRunModal`**에서 (1) `sync-tree` (2) `process-pending-text` (3) `process-pending-documents` — 공통 `DocumentProcessingPanel` (4) `chunk-completed-text` (5) `embed-pending-chunks` 를 단계별로 다룹니다.
+- **실행 모드 (기본: 백그라운드 실행)**
+  - **즉시 실행:** 각 단계가 **동기** `POST /api/data-sources/{id}/...` 를 호출하며, 브라우저가 응답이 올 때까지 기다립니다. **권장 순서로 전체 실행**도 이 모드에서만 표시되며, 기존과 같이 5단계를 순차 HTTP로 실행합니다.
+  - **백그라운드 실행:** 실제 작업 등록은 `src/api/adminJobsApi.ts`의 **`postAdminSyncTreeJob`**, **`postAdminProcessPendingTextJob`**, **`postAdminProcessPendingDocumentsJob`**, **`postAdminChunkCompletedTextJob`**, **`postAdminEmbedPendingChunksJob`** 으로 각각 **`POST /api/admin/jobs/...`** 에 대응합니다. **대상 확인(dry_run)** 은 동기 API 그대로 사용합니다. Job 생성 후 **`getAdminJob`** 으로 단계 카드에 상태(`PENDING` / `RUNNING` / `CANCELLING` / `CANCELLED` / `COMPLETED` / `FAILED` 등)·`progress_percent`·`worker_id`·`heartbeat_at`·시작/종료 시각·`error_message` 를 표시합니다. **상태 새로고침** 버튼과, 기본 꺼짐인 **자동 새로고침(5초)** 체크박스가 있으며, 모달을 닫으면 자동 폴링이 중지됩니다. **`POST /api/admin/jobs/{job_id}/cancel`** 은 `/admin/jobs` 와 동일 정책( **취소** / **취소 요청** / **취소 요청 중** )으로 단계 카드에서 호출할 수 있습니다.
+- **백그라운드 권장 순서 Job 생성 v1:** 상단 **권장 순서로 백그라운드 Job 생성** 은 **parent pipeline job 없이** 브라우저가 Job을 하나씩 만들고, 이전 단계가 **`COMPLETED`** 또는 **`PARTIAL`** 이 될 때까지 **`getAdminJob`** 으로 5초 간격 폴링한 뒤 다음 단계를 등록합니다. **`FAILED`** / **`CANCELLED`** 이면 중단합니다. **`CANCELLING`** 은 계속 대기합니다(백엔드가 종료 상태로 바꿀 때까지). **HTTP 오류** 시에도 중단됩니다. **`/admin/jobs`** 목록에는 서로 독립인 Job이 최대 5개까지 올라갑니다. **한계:** 브라우저 탭을 닫거나 새로고침하면 **이미 생성된 Job은 worker에서 계속**될 수 있지만, **아직 등록되지 않은 다음 단계는 자동으로 만들어지지 않을 수 있습니다.**
+- **dry_run:** 텍스트·문서·Chunk·Embedding 단계의 **대상 확인** 버튼은 서버가 대상만 계산하고 DB/다운로드를 바꾸지 않는 호출입니다. **즉시 실행** 모드에서 **실제 실행**은 DB·파일 처리가 일어날 수 있으며 공통 확인 다이얼로그를 거칩니다. **sync-tree**는 dry_run이 없으므로 **동기화 실행**(즉시 모드) 또는 **동기화 Job 생성**(백그라운드 모드) 전에 옵션을 확인하세요.
+- **권장 순서로 전체 실행 (즉시 모드):** 모달 상단 버튼으로 위 5단계를 **브라우저에서 순차 호출**합니다. 각 카드에 입력한 옵션(limit, 경로, 확장자 등)은 그대로 쓰이며, **자동 실행만 `dry_run=false`로 강제**됩니다(카드에 dry_run이 켜져 있어도 무시). 자동 실행 전에는 단계별 **대상 확인(dry_run)** 을 권장합니다.
+- **중간 실패 (즉시 자동):** 어느 단계든 HTTP 오류·예외·또는 응답 `status === "error"` 이면 그 단계는 `error`, 이후 단계는 `skipped` 로 표시하고 자동 실행을 중단합니다. 응답 `status === "partial"` 인 경우에는 경고 문구를 남기고 **다음 단계는 계속 진행**합니다(`failed_count`가 커도 동일).
+- **진행·소요 시간:** **즉시 실행** 자동 실행 중 상단에 완료 수·현재 단계·실패/건너뜀 수·프로그레스 바를 표시하고, 단계별 카드에 시작/종료 시각·`formatDuration(ms)` 기반 소요 시간을 표시합니다.
+- **즉시 실행 한계:** 백그라운드 큐가 아니라 **탭이 열려 있는 동안의 순차 HTTP 요청**입니다.
+- 단계별 응답은 각 카드 아래에 요약·경고·`items` 상위 20건(초과 시 안내 문구)으로 표시합니다. 상단 바에 마지막 실행 단계/결과·완료·실패 단계 수를 표시합니다(즉시 실행 결과 기준).
 - **현재 파일 현황 보기**는 `GET /api/data-sources/{id}/file-stats`를 호출합니다. 단계 **수동** 실행 후에는 기존과 같이 `onRefresh`로 목록을 갱신합니다. **자동 실행**이 모두 끝난 뒤에도 한 번 갱신하며, 화면 상단 **목록 새로고침**으로 데이터 소스 테이블을 다시 불러올 수 있습니다.
-- 자동 실행 중에는 닫기·전체 실행·각 단계 실행 버튼이 비활성화되고, 문서 단계 패널의 실행 버튼도 비활성화됩니다.
+- 자동 실행(즉시)·백그라운드 순차 등록이 돌아가는 동안에는 닫기·해당 모드의 전체 실행·각 단계 실행·Job 생성 버튼이 비활성화되고, 문서 단계 패널의 동기 실행도 비활성화됩니다.
 
 ## 데이터 소스 API 구분
 
@@ -172,7 +176,7 @@ curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-docume
 - 상단에서 소스 선택·삭제 포함 체크박스·새로고침.
 - 요약 카드: 전체 항목, 파일 수, 디렉터리 수, 전체 용량, 마지막 동기화(+ 파일 최근 수정 힌트).
 - 테이블: 분석 상태·파일 유형·확장자·대용량 TOP. TOP 목록은 확장자 휴리스틱으로 **텍스트 미리보기** 가능 시 `/files/{id}/preview` 링크.
-- **문서 처리·스킵 안내** 카드: `SKIPPED` 건수·PDF 등 문서형 확장자 처리 안내(데이터 소스의 **문서 처리**로 연결).
+- **문서 처리·스킵 안내** 카드: `SKIPPED` 건수·PDF 등 문서형 확장자 처리 안내(데이터 소스의 **파이프라인 실행** 모달 Step 3로 연결).
 
 ## 타입 (`src/types`)
 
@@ -181,7 +185,7 @@ curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-docume
 ## 아직 남은 TODO (프론트)
 
 - **URL query state**와 필터·페이지(offset) 동기화 — 작업 로그·사용자 관리 등에 TODO 주석으로 표시해 두었습니다.
-- 인덱싱 파이프라인 **백그라운드 워커** — `WEBDAV_SYNC_TREE`, `PROCESS_PENDING_TEXT`, `PROCESS_PENDING_DOCUMENTS` 큐 실행·취소·stale 정리는 반영됨; **Chunk / Embedding** 단계의 worker 연동은 TODO.
+- 인덱싱 파이프라인 **parent/child pipeline job**(`scan_jobs.parent_job_id` 기반 서버 오케스트레이션)과 브라우저 없이 이어지는 순차 Job 등록 등은 미구현입니다.
 - **차트 라이브러리** 도입(파일 통계 시각화).
 - **모바일 햄버거 메뉴** 등 본격 반응형.
 - 미리보기 **쿼리 하이라이트** 정밀(offset 기반).

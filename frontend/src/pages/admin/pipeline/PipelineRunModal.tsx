@@ -1,6 +1,7 @@
 import { createPortal } from "react-dom";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import * as adminJobsApi from "@/api/adminJobsApi";
 import * as dsApi from "@/api/dataSourceApi";
 import { getApiErrorMessage } from "@/api/httpClient";
 import { ErrorMessage } from "@/components/ErrorMessage";
@@ -21,7 +22,13 @@ import type {
   PipelineAutoStepState,
   PipelineStepStatus,
 } from "@/types/pipeline";
+import type {
+  BackgroundPipelineStepState,
+  ExecutionMode,
+  PipelineBackgroundStepId,
+} from "@/types/pipelineBackground";
 import { formatDateTime, formatDuration, formatInt } from "@/utils/format";
+import { getJobStatusBadgeVariant, getJobTypeLabel } from "@/utils/jobLabels";
 import {
   DocumentProcessingPanel,
   type DocumentPipelineFormSnapshot,
@@ -88,6 +95,32 @@ const CONFIRM_MSG =
 
 const AUTO_CONFIRM_MSG =
   "전체 파이프라인을 순차 실행합니다. 이 작업은 파일 다운로드, 본문 추출, chunk 생성, embedding 저장 등 DB 상태를 변경할 수 있습니다. 계속하시겠습니까?";
+
+const BG_AUTO_CONFIRM_MSG =
+  "백그라운드 파이프라인을 순차 등록합니다. 각 단계가 완료되면 다음 단계 Job을 생성합니다. 브라우저를 닫으면 현재 실행 중인 Job은 계속 처리되지만 다음 단계 자동 등록은 중단될 수 있습니다. 계속하시겠습니까?";
+
+function canShowJobCancelButton(status: string | undefined): boolean {
+  const u = (status || "").toUpperCase();
+  return u === "PENDING" || u === "RUNNING" || u === "CANCELLING";
+}
+
+function bgStepLabel(id: PipelineBackgroundStepId): string {
+  return STEP_LABEL[id];
+}
+
+function emptyBgStep(id: PipelineBackgroundStepId): BackgroundPipelineStepState {
+  return { key: id, label: bgStepLabel(id) };
+}
+
+function initialBgSteps(): Record<StepId, BackgroundPipelineStepState> {
+  return {
+    sync: emptyBgStep("sync"),
+    text: emptyBgStep("text"),
+    doc: emptyBgStep("doc"),
+    chunk: emptyBgStep("chunk"),
+    embed: emptyBgStep("embed"),
+  };
+}
 
 function initialAutoSteps(): PipelineAutoStepState[] {
   return [
@@ -250,9 +283,313 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
   const [embedReembed, setEmbedReembed] = useState(false);
   const [embedIncludeExt, setEmbedIncludeExt] = useState("");
 
-  const disableManualActions = autoRunning || loading !== null;
-  const formDisabled = autoRunning;
-  const closeDisabled = autoRunning;
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>("background");
+  const [bgSteps, setBgSteps] = useState<Record<StepId, BackgroundPipelineStepState>>(() => initialBgSteps());
+  const [bgAutoPoll, setBgAutoPoll] = useState(false);
+  const [bgSequentialRunning, setBgSequentialRunning] = useState(false);
+  const [confirmBgAutoOpen, setConfirmBgAutoOpen] = useState(false);
+  const [bgCancelDialogStep, setBgCancelDialogStep] = useState<StepId | null>(null);
+  const [bgCancelBusy, setBgCancelBusy] = useState(false);
+  const [bgEnqueueStep, setBgEnqueueStep] = useState<StepId | null>(null);
+  const bgStepsRef = useRef(bgSteps);
+  const bgAbortSequentialRef = useRef(false);
+
+  useEffect(() => {
+    bgStepsRef.current = bgSteps;
+  }, [bgSteps]);
+
+  useEffect(() => {
+    if (executionMode !== "background") {
+      setBgAutoPoll(false);
+    }
+  }, [executionMode]);
+
+  useEffect(() => {
+    if (!bgAutoPoll || executionMode !== "background") return;
+    const tick = () => {
+      void (async () => {
+        const steps = bgStepsRef.current;
+        for (const id of STEPS_ORDER) {
+          const jid = steps[id].jobId;
+          if (!jid) continue;
+          try {
+            const d = await adminJobsApi.getAdminJob(jid);
+            const job = d.job;
+            setBgSteps((prev) => ({
+              ...prev,
+              [id]: {
+                ...prev[id],
+                jobType: job.job_type,
+                status: job.status,
+                progressPercent: job.progress_percent,
+                workerId: job.worker_id ?? null,
+                heartbeatAt: job.heartbeat_at,
+                startedAt: job.started_at,
+                finishedAt: job.finished_at,
+                errorMessage: job.error_message,
+                lastUpdatedAt: new Date().toISOString(),
+              },
+            }));
+          } catch {
+            /* 단일 폴링 실패는 무시 */
+          }
+        }
+      })();
+    };
+    tick();
+    const intervalId = window.setInterval(tick, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [bgAutoPoll, executionMode]);
+
+  const mergeJobIntoBgStep = useCallback((stepId: StepId, job: import("@/types/adminJobs").AdminJob) => {
+    setBgSteps((prev) => ({
+      ...prev,
+      [stepId]: {
+        ...prev[stepId],
+        jobId: job.id,
+        jobType: job.job_type,
+        status: job.status,
+        progressPercent: job.progress_percent,
+        workerId: job.worker_id ?? null,
+        heartbeatAt: job.heartbeat_at,
+        startedAt: job.started_at,
+        finishedAt: job.finished_at,
+        errorMessage: job.error_message,
+        lastUpdatedAt: new Date().toISOString(),
+      },
+    }));
+  }, []);
+
+  async function enqueueBackgroundJobForStep(stepId: StepId): Promise<{ jobId: string; jobType: string }> {
+    const ds = dataSource.id;
+    if (stepId === "sync") {
+      const r = await adminJobsApi.postAdminSyncTreeJob({
+        data_source_id: ds,
+        start_path: startPath || "/",
+        max_depth: maxDepth,
+        max_items: maxItems,
+        include_hidden: includeHidden,
+        apply_exclusions: applyExclusions,
+        detect_deleted: detectDeleted,
+        priority: 0,
+      });
+      return { jobId: r.job_id, jobType: r.job_type };
+    }
+    if (stepId === "text") {
+      const r = await adminJobsApi.postAdminProcessPendingTextJob({
+        data_source_id: ds,
+        limit: textLimit,
+        max_file_size_bytes: textMaxMb * 1024 * 1024,
+        include_extensions: textIncludeExt.trim() || undefined,
+        priority: 0,
+      });
+      return { jobId: r.job_id, jobType: r.job_type };
+    }
+    if (stepId === "doc") {
+      const p = docParamsRef.current;
+      const include = p?.include_extensions?.trim();
+      if (!p || !include) {
+        throw new Error("문서 처리: 확장자를 하나 이상 선택해 주세요.");
+      }
+      const r = await adminJobsApi.postAdminProcessPendingDocumentsJob({
+        data_source_id: ds,
+        limit: p.limit,
+        max_file_size_bytes: p.max_file_size_bytes,
+        include_extensions: include,
+        reprocess_skipped: p.reprocess_skipped,
+        priority: 0,
+      });
+      return { jobId: r.job_id, jobType: r.job_type };
+    }
+    if (stepId === "chunk") {
+      const cs = Math.min(10_000, Math.max(200, Number(chunkSize) || 1200));
+      const co = Math.min(9999, Math.max(0, Number(chunkOverlap) || 0));
+      if (co >= cs) {
+        throw new Error("chunk_overlap은 chunk_size보다 작아야 합니다.");
+      }
+      const r = await adminJobsApi.postAdminChunkCompletedTextJob({
+        data_source_id: ds,
+        limit: Math.min(5000, Math.max(1, chunkLimit)),
+        chunk_size: cs,
+        chunk_overlap: co,
+        min_chunk_size: Math.max(1, Math.min(10_000, Number(chunkMin) || 100)),
+        reprocess: chunkReprocess,
+        include_extensions: chunkIncludeExt.trim() || undefined,
+        priority: 0,
+      });
+      return { jobId: r.job_id, jobType: r.job_type };
+    }
+    const r = await adminJobsApi.postAdminEmbedPendingChunksJob({
+      data_source_id: ds,
+      limit: Math.min(10_000, Math.max(1, embedLimit)),
+      batch_size: Math.min(128, Math.max(1, embedBatch)),
+      reembed: embedReembed,
+      include_extensions: embedIncludeExt.trim() || undefined,
+      priority: 0,
+    });
+    return { jobId: r.job_id, jobType: r.job_type };
+  }
+
+  async function pollJobUntilTerminal(stepId: StepId, jobId: string): Promise<{ ok: boolean; status: string }> {
+    while (!bgAbortSequentialRef.current) {
+      try {
+        const d = await adminJobsApi.getAdminJob(jobId);
+        mergeJobIntoBgStep(stepId, d.job);
+        const st = (d.job.status || "").toUpperCase();
+        if (st === "COMPLETED" || st === "PARTIAL") return { ok: true, status: st };
+        if (st === "FAILED" || st === "CANCELLED") return { ok: false, status: st };
+      } catch {
+        return { ok: false, status: "ERROR" };
+      }
+      await new Promise((res) => setTimeout(res, 5000));
+    }
+    return { ok: false, status: "ABORTED" };
+  }
+
+  async function executeBackgroundAutoPipeline() {
+    bgAbortSequentialRef.current = false;
+    setBgSequentialRunning(true);
+    setBgSteps(initialBgSteps());
+    try {
+      for (const stepId of STEPS_ORDER) {
+        if (bgAbortSequentialRef.current) break;
+        let out: { jobId: string; jobType: string };
+        try {
+          out = await enqueueBackgroundJobForStep(stepId);
+        } catch (e) {
+          const msg = getApiErrorMessage(e);
+          setBgSteps((prev) => ({
+            ...prev,
+            [stepId]: {
+              ...prev[stepId],
+              errorMessage: msg,
+              enqueueMessage: msg,
+              status: "ENQUEUE_FAILED",
+              lastUpdatedAt: new Date().toISOString(),
+            },
+          }));
+          break;
+        }
+        const { jobId, jobType } = out;
+        setBgSteps((prev) => ({
+          ...prev,
+          [stepId]: {
+            ...prev[stepId],
+            jobId,
+            jobType,
+            status: "PENDING",
+            enqueueMessage: "worker를 실행해야 작업이 처리됩니다. 초기 상태: PENDING",
+            lastUpdatedAt: new Date().toISOString(),
+          },
+        }));
+        try {
+          const jd = await adminJobsApi.getAdminJob(jobId);
+          mergeJobIntoBgStep(stepId, jd.job);
+          const st0 = (jd.job.status || "").toUpperCase();
+          if (st0 === "FAILED" || st0 === "CANCELLED") break;
+          if (st0 !== "COMPLETED" && st0 !== "PARTIAL") {
+            const pr = await pollJobUntilTerminal(stepId, jobId);
+            if (!pr.ok) break;
+          }
+        } catch {
+          break;
+        }
+      }
+    } finally {
+      setBgSequentialRunning(false);
+      void onRefreshRef.current();
+    }
+  }
+
+  const refreshBgStep = useCallback(
+    async (stepId: StepId) => {
+      const jid = bgStepsRef.current[stepId].jobId;
+      if (!jid) return;
+      try {
+        const d = await adminJobsApi.getAdminJob(jid);
+        mergeJobIntoBgStep(stepId, d.job);
+      } catch {
+        /* ignore */
+      }
+    },
+    [mergeJobIntoBgStep]
+  );
+
+  const refreshAllBgSteps = useCallback(async () => {
+    for (const id of STEPS_ORDER) await refreshBgStep(id);
+  }, [refreshBgStep]);
+
+  const handleModalClose = useCallback(() => {
+    bgAbortSequentialRef.current = true;
+    setBgAutoPoll(false);
+    onClose();
+  }, [onClose]);
+
+  const disableManualActions = autoRunning || loading !== null || bgSequentialRunning || bgEnqueueStep !== null;
+  const formDisabled = autoRunning || bgSequentialRunning;
+  const closeDisabled = autoRunning || bgSequentialRunning || loading !== null;
+
+  async function handleBgEnqueue(stepId: StepId) {
+    setBgEnqueueStep(stepId);
+    try {
+      const out = await enqueueBackgroundJobForStep(stepId);
+      setBgSteps((prev) => ({
+        ...prev,
+        [stepId]: {
+          ...prev[stepId],
+          jobId: out.jobId,
+          jobType: out.jobType,
+          status: "PENDING",
+          enqueueMessage: "worker를 실행해야 작업이 처리됩니다. 상태: PENDING",
+          errorMessage: null,
+          lastUpdatedAt: new Date().toISOString(),
+        },
+      }));
+      try {
+        const jd = await adminJobsApi.getAdminJob(out.jobId);
+        mergeJobIntoBgStep(stepId, jd.job);
+      } catch {
+        /* 초기 조회 실패는 무시 */
+      }
+    } catch (e) {
+      const msg = getApiErrorMessage(e);
+      setBgSteps((prev) => ({
+        ...prev,
+        [stepId]: {
+          ...prev[stepId],
+          errorMessage: msg,
+          enqueueMessage: msg,
+          status: "ENQUEUE_FAILED",
+          lastUpdatedAt: new Date().toISOString(),
+        },
+      }));
+    } finally {
+      setBgEnqueueStep(null);
+      void onRefreshRef.current();
+    }
+  }
+
+  async function confirmBgStepCancel() {
+    const sid = bgCancelDialogStep;
+    if (!sid) return;
+    const jid = bgStepsRef.current[sid]?.jobId;
+    if (!jid) {
+      setBgCancelDialogStep(null);
+      return;
+    }
+    setBgCancelBusy(true);
+    try {
+      await adminJobsApi.cancelAdminJob(jid);
+      await refreshBgStep(sid);
+    } catch (e) {
+      const msg = getApiErrorMessage(e);
+      setBgSteps((prev) => ({ ...prev, [sid]: { ...prev[sid], errorMessage: msg } }));
+    } finally {
+      setBgCancelBusy(false);
+      setBgCancelDialogStep(null);
+      void onRefreshRef.current();
+    }
+  }
 
   const summary = useMemo(() => {
     const entries = STEPS_ORDER.map((id) => ({
@@ -265,6 +602,29 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
     const lastOk = lastRun ? (lastRun.ok ? "성공" : "실패") : "—";
     return { completed, failed, lastLabel, lastOk };
   }, [snap, lastRun]);
+
+  const bgSummary = useMemo(() => {
+    const rows = STEPS_ORDER.map((id) => bgSteps[id]);
+    const withJob = rows.filter((r) => Boolean(r.jobId));
+    const completed = withJob.filter((r) => {
+      const s = (r.status || "").toUpperCase();
+      return s === "COMPLETED" || s === "PARTIAL";
+    });
+    const failedWithJob = withJob.filter((r) => (r.status || "").toUpperCase() === "FAILED");
+    const failedEnqueue = rows.filter((r) => (r.status || "") === "ENQUEUE_FAILED").length;
+    const cancelled = withJob.filter((r) => (r.status || "").toUpperCase() === "CANCELLED");
+    const inFlight = withJob.filter((r) => {
+      const s = (r.status || "").toUpperCase();
+      return s === "PENDING" || s === "RUNNING" || s === "CANCELLING";
+    });
+    return {
+      created: withJob.length,
+      completed: completed.length,
+      failed: failedWithJob.length + failedEnqueue,
+      cancelled: cancelled.length,
+      inFlight: inFlight.length,
+    };
+  }, [bgSteps]);
 
   const autoProgress = useMemo(() => {
     const success = autoSteps.filter((s) => s.status === "success").length;
@@ -568,14 +928,14 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
         className={docStyles.overlay}
         role="presentation"
         onMouseDown={(e) => {
-          if (e.target === e.currentTarget && !autoRunning) onClose();
+          if (e.target === e.currentTarget && !closeDisabled) handleModalClose();
         }}
       >
         <div className={docStyles.panel} onMouseDown={(e) => e.stopPropagation()}>
           <SectionCard
             title="인덱싱 파이프라인 실행"
             actions={
-              <Button type="button" variant="ghost" size="sm" onClick={onClose} disabled={closeDisabled}>
+              <Button type="button" variant="ghost" size="sm" onClick={handleModalClose} disabled={closeDisabled}>
                 닫기
               </Button>
             }
@@ -590,26 +950,122 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
               </li>
               <li>동기화(Step 1)는 dry_run 옵션이 없습니다. 실행 전 범위를 확인하세요.</li>
               <li>
-                <strong>자동 실행은 실제 실행 모드로 동작하며 dry_run은 적용되지 않습니다.</strong> 자동 실행 전 단계별 대상 확인(dry_run)을 권장합니다.
+                <strong>즉시 실행</strong> 모드에서 &quot;권장 순서로 전체 실행&quot;은 dry_run 없이 동기 API를 연속 호출합니다.{" "}
+                <strong>백그라운드 실행</strong> 모드에서는 단계별로 Job만 등록합니다.
               </li>
             </ul>
 
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.75rem", alignItems: "center" }}>
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                disabled={disableManualActions}
-                onClick={() => setConfirmAutoOpen(true)}
-              >
-                권장 순서로 전체 실행
-              </Button>
-              <span className="muted" style={{ fontSize: "0.8rem", maxWidth: "28rem" }}>
-                WebDAV 동기화부터 Embedding 생성까지 순차 실행합니다. 중간 단계가 실패하면 다음 단계는 실행하지 않습니다.
-              </span>
+            <div className={styles.execModeRow} role="radiogroup" aria-label="실행 모드">
+              <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>실행 모드</span>
+              <label className={styles.check}>
+                <input
+                  type="radio"
+                  name="pipeline-exec-mode"
+                  checked={executionMode === "immediate"}
+                  onChange={() => setExecutionMode("immediate")}
+                  disabled={formDisabled}
+                />
+                즉시 실행
+              </label>
+              <label className={styles.check}>
+                <input
+                  type="radio"
+                  name="pipeline-exec-mode"
+                  checked={executionMode === "background"}
+                  onChange={() => setExecutionMode("background")}
+                  disabled={formDisabled}
+                />
+                백그라운드 실행
+              </label>
             </div>
+            <p className="muted" style={{ fontSize: "0.8rem", marginTop: "0.35rem", marginBottom: 0 }}>
+              {executionMode === "immediate" ? (
+                <>즉시 실행: 현재 브라우저 요청 안에서 API가 완료될 때까지 기다립니다.</>
+              ) : (
+                <>
+                  백그라운드 실행: 작업을 Job으로 등록하고 worker가 처리합니다. 대량 파일 처리에 권장됩니다. 전체 목록은{" "}
+                  <Link to="/admin/jobs">/admin/jobs</Link>에서 확인할 수 있습니다.
+                </>
+              )}
+            </p>
 
-            {autoRunning && (
+            {executionMode === "background" && (
+              <div className={styles.bgToolBar}>
+                <div className="muted" style={{ fontSize: "0.8rem", display: "flex", flexWrap: "wrap", gap: "0.5rem 1rem" }}>
+                  <span>
+                    생성된 Job: <strong>{bgSummary.created}</strong>
+                  </span>
+                  <span>
+                    완료: <strong>{bgSummary.completed}</strong>
+                  </span>
+                  <span>
+                    실패: <strong>{bgSummary.failed}</strong>
+                  </span>
+                  <span>
+                    취소: <strong>{bgSummary.cancelled}</strong>
+                  </span>
+                  <span>
+                    대기/실행: <strong>{bgSummary.inFlight}</strong>
+                  </span>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem", alignItems: "center" }}>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={bgSequentialRunning}
+                    onClick={() => void refreshAllBgSteps()}
+                  >
+                    상태 새로고침
+                  </Button>
+                  <label className={styles.check}>
+                    <input
+                      type="checkbox"
+                      checked={bgAutoPoll}
+                      onChange={(e) => setBgAutoPoll(e.target.checked)}
+                      disabled={bgSequentialRunning}
+                    />
+                    자동 새로고침 (5초)
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {executionMode === "immediate" && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.75rem", alignItems: "center" }}>
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  disabled={disableManualActions}
+                  onClick={() => setConfirmAutoOpen(true)}
+                >
+                  권장 순서로 전체 실행
+                </Button>
+                <span className="muted" style={{ fontSize: "0.8rem", maxWidth: "28rem" }}>
+                  WebDAV 동기화부터 Embedding 생성까지 순차 실행합니다. 중간 단계가 실패하면 다음 단계는 실행하지 않습니다.
+                </span>
+              </div>
+            )}
+
+            {executionMode === "background" && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.75rem", alignItems: "center" }}>
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  disabled={disableManualActions}
+                  onClick={() => setConfirmBgAutoOpen(true)}
+                >
+                  권장 순서로 백그라운드 Job 생성
+                </Button>
+                <span className="muted" style={{ fontSize: "0.8rem", maxWidth: "28rem" }}>
+                  parent pipeline job 없이 최대 5개의 개별 Job을 브라우저가 순서대로 등록합니다. 브라우저를 닫으면 이후 단계 자동 등록이 중단될 수 있습니다.
+                </span>
+              </div>
+            )}
+
+            {executionMode === "immediate" && autoRunning && (
               <div className={styles.autoProgressWrap}>
                 <div className={styles.autoProgressMeta}>
                   <span>
@@ -629,7 +1085,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
               </div>
             )}
 
-            {autoSummary && (
+            {executionMode === "immediate" && autoSummary && (
               <div
                 className={autoSummary.ok ? "alert alertSuccess" : "alert alertDanger"}
                 style={{ marginTop: "0.65rem" }}
@@ -663,7 +1119,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
               </div>
             )}
 
-            {(autoRunning || autoSteps.some((s) => s.status !== "idle")) && (
+            {executionMode === "immediate" && (autoRunning || autoSteps.some((s) => s.status !== "idle")) && (
               <div className={styles.autoStepGrid} style={{ marginTop: "0.65rem" }}>
                 {autoSteps.map((row) => (
                   <div key={row.key} className={styles.autoStepCard}>
@@ -796,30 +1252,52 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                   detect_deleted
                 </label>
               </div>
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                style={{ marginTop: "0.65rem" }}
-                loading={loading === "sync"}
-                disabled={disableManualActions && loading !== "sync"}
-                onClick={() =>
-                  requestConfirm(() =>
-                    runWithLoading("sync", () =>
-                      dsApi.syncTree(dataSource.id, {
-                        start_path: startPath || "/",
-                        max_depth: maxDepth,
-                        max_items: maxItems,
-                        include_hidden: includeHidden,
-                        apply_exclusions: applyExclusions,
-                        detect_deleted: detectDeleted,
-                      })
+              {executionMode === "immediate" ? (
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  style={{ marginTop: "0.65rem" }}
+                  loading={loading === "sync"}
+                  disabled={disableManualActions && loading !== "sync"}
+                  onClick={() =>
+                    requestConfirm(() =>
+                      runWithLoading("sync", () =>
+                        dsApi.syncTree(dataSource.id, {
+                          start_path: startPath || "/",
+                          max_depth: maxDepth,
+                          max_items: maxItems,
+                          include_hidden: includeHidden,
+                          apply_exclusions: applyExclusions,
+                          detect_deleted: detectDeleted,
+                        })
+                      )
                     )
-                  )
-                }
-              >
-                동기화 실행
-              </Button>
+                  }
+                >
+                  동기화 실행
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  style={{ marginTop: "0.65rem" }}
+                  loading={bgEnqueueStep === "sync"}
+                  disabled={disableManualActions && bgEnqueueStep !== "sync"}
+                  onClick={() => void handleBgEnqueue("sync")}
+                >
+                  동기화 Job 생성
+                </Button>
+              )}
+              {executionMode === "background" && (
+                <BackgroundJobSection
+                  step={bgSteps.sync}
+                  onRefresh={() => void refreshBgStep("sync")}
+                  onRequestCancel={() => setBgCancelDialogStep("sync")}
+                  cancelInFlight={bgCancelBusy}
+                />
+              )}
               <StepResultBlock snap={snap.sync} />
             </SectionCard>
 
@@ -875,28 +1353,49 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                 >
                   대상 확인
                 </Button>
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  loading={loading === "text"}
-                  disabled={disableManualActions && loading !== "text"}
-                  onClick={() =>
-                    requestConfirm(() =>
-                      runWithLoading("text", () =>
-                        dsApi.processPendingText(dataSource.id, {
-                          limit: textLimit,
-                          max_file_size_bytes: textMaxMb * 1024 * 1024,
-                          include_extensions: textIncludeExt.trim() || undefined,
-                          dry_run: false,
-                        })
+                {executionMode === "immediate" ? (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    loading={loading === "text"}
+                    disabled={disableManualActions && loading !== "text"}
+                    onClick={() =>
+                      requestConfirm(() =>
+                        runWithLoading("text", () =>
+                          dsApi.processPendingText(dataSource.id, {
+                            limit: textLimit,
+                            max_file_size_bytes: textMaxMb * 1024 * 1024,
+                            include_extensions: textIncludeExt.trim() || undefined,
+                            dry_run: false,
+                          })
+                        )
                       )
-                    )
-                  }
-                >
-                  실제 실행
-                </Button>
+                    }
+                  >
+                    실제 실행
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    loading={bgEnqueueStep === "text"}
+                    disabled={disableManualActions && bgEnqueueStep !== "text"}
+                    onClick={() => void handleBgEnqueue("text")}
+                  >
+                    텍스트 처리 Job 생성
+                  </Button>
+                )}
               </div>
+              {executionMode === "background" && (
+                <BackgroundJobSection
+                  step={bgSteps.text}
+                  onRefresh={() => void refreshBgStep("text")}
+                  onRequestCancel={() => setBgCancelDialogStep("text")}
+                  cancelInFlight={bgCancelBusy}
+                />
+              )}
               <StepResultBlock snap={snap.text} />
             </SectionCard>
 
@@ -910,8 +1409,31 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                 onDocumentApiOutcome={handleDocOutcome}
                 onRunComplete={onRefresh}
                 onDocumentParamsSnapshot={onDocumentParamsSnapshot}
-                disableRunButtons={autoRunning}
+                disableRunButtons={disableManualActions}
+                suppressDocumentRealRun={executionMode === "background"}
               />
+              {executionMode === "background" && (
+                <>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.65rem" }}>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="sm"
+                      loading={bgEnqueueStep === "doc"}
+                      disabled={disableManualActions && bgEnqueueStep !== "doc"}
+                      onClick={() => void handleBgEnqueue("doc")}
+                    >
+                      문서 처리 Job 생성
+                    </Button>
+                  </div>
+                  <BackgroundJobSection
+                    step={bgSteps.doc}
+                    onRefresh={() => void refreshBgStep("doc")}
+                    onRequestCancel={() => setBgCancelDialogStep("doc")}
+                    cancelInFlight={bgCancelBusy}
+                  />
+                </>
+              )}
               <StepResultBlock snap={snap.doc} />
             </SectionCard>
 
@@ -995,31 +1517,52 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                 >
                   대상 확인
                 </Button>
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  loading={loading === "chunk"}
-                  disabled={disableManualActions && loading !== "chunk"}
-                  onClick={() =>
-                    requestConfirm(() =>
-                      runWithLoading("chunk", () =>
-                        dsApi.chunkCompletedText(dataSource.id, {
-                          limit: chunkLimit,
-                          chunk_size: chunkSize,
-                          chunk_overlap: chunkOverlap,
-                          min_chunk_size: chunkMin,
-                          reprocess: chunkReprocess,
-                          dry_run: false,
-                          include_extensions: chunkIncludeExt.trim() || undefined,
-                        })
+                {executionMode === "immediate" ? (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    loading={loading === "chunk"}
+                    disabled={disableManualActions && loading !== "chunk"}
+                    onClick={() =>
+                      requestConfirm(() =>
+                        runWithLoading("chunk", () =>
+                          dsApi.chunkCompletedText(dataSource.id, {
+                            limit: chunkLimit,
+                            chunk_size: chunkSize,
+                            chunk_overlap: chunkOverlap,
+                            min_chunk_size: chunkMin,
+                            reprocess: chunkReprocess,
+                            dry_run: false,
+                            include_extensions: chunkIncludeExt.trim() || undefined,
+                          })
+                        )
                       )
-                    )
-                  }
-                >
-                  실제 실행
-                </Button>
+                    }
+                  >
+                    실제 실행
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    loading={bgEnqueueStep === "chunk"}
+                    disabled={disableManualActions && bgEnqueueStep !== "chunk"}
+                    onClick={() => void handleBgEnqueue("chunk")}
+                  >
+                    Chunk 생성 Job 생성
+                  </Button>
+                )}
               </div>
+              {executionMode === "background" && (
+                <BackgroundJobSection
+                  step={bgSteps.chunk}
+                  onRefresh={() => void refreshBgStep("chunk")}
+                  onRequestCancel={() => setBgCancelDialogStep("chunk")}
+                  cancelInFlight={bgCancelBusy}
+                />
+              )}
               <StepResultBlock snap={snap.chunk} />
             </SectionCard>
 
@@ -1082,29 +1625,50 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                 >
                   대상 확인
                 </Button>
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  loading={loading === "embed"}
-                  disabled={disableManualActions && loading !== "embed"}
-                  onClick={() =>
-                    requestConfirm(() =>
-                      runWithLoading("embed", () =>
-                        dsApi.embedPendingChunks(dataSource.id, {
-                          limit: embedLimit,
-                          batch_size: embedBatch,
-                          reembed: embedReembed,
-                          dry_run: false,
-                          include_extensions: embedIncludeExt.trim() || undefined,
-                        })
+                {executionMode === "immediate" ? (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    loading={loading === "embed"}
+                    disabled={disableManualActions && loading !== "embed"}
+                    onClick={() =>
+                      requestConfirm(() =>
+                        runWithLoading("embed", () =>
+                          dsApi.embedPendingChunks(dataSource.id, {
+                            limit: embedLimit,
+                            batch_size: embedBatch,
+                            reembed: embedReembed,
+                            dry_run: false,
+                            include_extensions: embedIncludeExt.trim() || undefined,
+                          })
+                        )
                       )
-                    )
-                  }
-                >
-                  실제 실행
-                </Button>
+                    }
+                  >
+                    실제 실행
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    loading={bgEnqueueStep === "embed"}
+                    disabled={disableManualActions && bgEnqueueStep !== "embed"}
+                    onClick={() => void handleBgEnqueue("embed")}
+                  >
+                    Embedding 생성 Job 생성
+                  </Button>
+                )}
               </div>
+              {executionMode === "background" && (
+                <BackgroundJobSection
+                  step={bgSteps.embed}
+                  onRefresh={() => void refreshBgStep("embed")}
+                  onRequestCancel={() => setBgCancelDialogStep("embed")}
+                  cancelInFlight={bgCancelBusy}
+                />
+              )}
               <StepResultBlock snap={snap.embed} />
             </SectionCard>
           </div>
@@ -1136,8 +1700,125 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
           void executeAutoPipeline();
         }}
       />
+
+      <ConfirmDialog
+        open={confirmBgAutoOpen}
+        title="백그라운드 파이프라인"
+        message={BG_AUTO_CONFIRM_MSG}
+        confirmLabel="계속"
+        cancelLabel="취소"
+        onCancel={() => setConfirmBgAutoOpen(false)}
+        onConfirm={() => {
+          setConfirmBgAutoOpen(false);
+          void executeBackgroundAutoPipeline();
+        }}
+      />
+
+      <ConfirmDialog
+        open={bgCancelDialogStep !== null}
+        title="작업 취소"
+        message="이 작업에 취소 요청을 보냅니다. 실행 중인 작업은 다음 안전 지점에서 중단됩니다. 계속하시겠습니까?"
+        confirmLabel="계속"
+        cancelLabel="취소"
+        onCancel={() => setBgCancelDialogStep(null)}
+        onConfirm={() => {
+          void confirmBgStepCancel();
+        }}
+      />
     </>,
     document.body
+  );
+}
+
+function cancelJobButtonLabel(status: string | undefined): string {
+  const u = (status || "").toUpperCase();
+  if (u === "CANCELLING") return "취소 요청 중";
+  if (u === "PENDING") return "취소";
+  return "취소 요청";
+}
+
+function BackgroundJobSection({
+  step,
+  onRefresh,
+  onRequestCancel,
+  cancelInFlight,
+}: {
+  step: BackgroundPipelineStepState;
+  onRefresh: () => void;
+  onRequestCancel: () => void;
+  cancelInFlight: boolean;
+}) {
+  const st = (step.status || "").toUpperCase();
+  const showCard =
+    Boolean(step.jobId) || st === "ENQUEUE_FAILED" || Boolean(step.enqueueMessage && !step.jobId);
+  if (!showCard) return null;
+
+  return (
+    <div className={styles.bgJobCard}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+        <strong style={{ fontSize: "0.85rem" }}>백그라운드 Job</strong>
+        <Link to="/admin/jobs" className="btn btnSecondary btnSm">
+          작업 목록 (/admin/jobs)
+        </Link>
+        {step.jobId && (
+          <Button type="button" variant="ghost" size="sm" onClick={onRefresh}>
+            이 단계만 새로고침
+          </Button>
+        )}
+      </div>
+      {step.enqueueMessage && (
+        <p className="muted" style={{ fontSize: "0.78rem", marginTop: "0.35rem", marginBottom: 0 }}>
+          {step.enqueueMessage}
+        </p>
+      )}
+      {step.jobId && (
+        <>
+          <div style={{ marginTop: "0.35rem", display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+            <span className="muted" style={{ fontSize: "0.78rem" }}>
+              Job ID: <code style={{ fontSize: "0.78rem" }}>{step.jobId}</code>
+            </span>
+            {step.jobType && (
+              <span className="muted" style={{ fontSize: "0.75rem" }}>
+                {getJobTypeLabel(step.jobType)} ({step.jobType})
+              </span>
+            )}
+            {step.status && <Badge variant={getJobStatusBadgeVariant(step.status)}>{step.status}</Badge>}
+          </div>
+          <div className={styles.bgJobMeta}>
+            <div>
+              <span className="muted">progress_percent</span> {step.progressPercent != null ? `${step.progressPercent}%` : "—"}
+            </div>
+            <div>
+              <span className="muted">worker_id</span> {step.workerId ?? "—"}
+            </div>
+            <div>
+              <span className="muted">heartbeat_at</span> {step.heartbeatAt ? formatDateTime(step.heartbeatAt) : "—"}
+            </div>
+            <div>
+              <span className="muted">started_at</span> {step.startedAt ? formatDateTime(step.startedAt) : "—"}
+            </div>
+            <div>
+              <span className="muted">finished_at</span> {step.finishedAt ? formatDateTime(step.finishedAt) : "—"}
+            </div>
+          </div>
+          {step.errorMessage ? <ErrorMessage message={step.errorMessage} /> : null}
+          {canShowJobCancelButton(step.status) && (
+            <div style={{ marginTop: "0.5rem" }}>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={cancelInFlight || st === "CANCELLING"}
+                onClick={onRequestCancel}
+              >
+                {cancelJobButtonLabel(step.status)}
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+      {!step.jobId && st === "ENQUEUE_FAILED" && step.errorMessage ? <ErrorMessage message={step.errorMessage} /> : null}
+    </div>
   );
 }
 

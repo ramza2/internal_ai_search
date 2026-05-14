@@ -16,7 +16,6 @@ import {
 } from "@/components/ui";
 import type { DataSource, DataSourceUpdateBody, SourceType } from "@/types/dataSource";
 import { formatDateTime } from "@/utils/format";
-import { DocumentProcessModal } from "./DocumentProcessModal";
 import { PipelineRunModal } from "./pipeline/PipelineRunModal";
 
 const WEBDAV_SOURCE_TYPES: SourceType[] = ["OWNCLOUD", "NEXTCLOUD", "GENERIC_WEBDAV"];
@@ -41,7 +40,6 @@ export function DataSourcesPage() {
   const [msgTone, setMsgTone] = useState<"info" | "success" | "danger">("info");
   const [showForm, setShowForm] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
-  const [docModalSource, setDocModalSource] = useState<DataSource | null>(null);
   const [pipelineSource, setPipelineSource] = useState<DataSource | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<EditFormState | null>(null);
@@ -440,14 +438,6 @@ export function DataSourcesPage() {
                     type="button"
                     variant="secondary"
                     size="sm"
-                    onClick={() => setDocModalSource(ds)}
-                  >
-                    문서 처리
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
                     onClick={() => testOne(ds.id)}
                     loading={testingId === ds.id}
                     disabled={testingId !== null && testingId !== ds.id}
@@ -470,9 +460,6 @@ export function DataSourcesPage() {
         </DataTable>
       </SectionCard>
 
-      {docModalSource && (
-        <DocumentProcessModal dataSource={docModalSource} onClose={() => setDocModalSource(null)} />
-      )}
       {pipelineSource && (
         <PipelineRunModal
           dataSource={pipelineSource}
