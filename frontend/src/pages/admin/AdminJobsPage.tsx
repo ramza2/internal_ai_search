@@ -24,6 +24,7 @@ import { PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS } from "@/types/adminJobs"
 import { formatDateTime, formatDuration } from "@/utils/format";
 import { getJobStatusBadgeVariant, getJobTypeLabel } from "@/utils/jobLabels";
 import docStyles from "./DocumentProcessModal.module.css";
+import jobsTableStyles from "./AdminJobsPage.module.css";
 
 const STATUS_OPTIONS = [
   "",
@@ -952,7 +953,7 @@ export function AdminJobsPage() {
                   <th>status</th>
                   <th>소스</th>
                   <th>우선순위</th>
-                  <th>job_params</th>
+                  <th className={jobsTableStyles.thJobParams}>job_params</th>
                   <th>파이프라인</th>
                   <th>worker</th>
                   <th>heartbeat</th>
@@ -986,8 +987,7 @@ export function AdminJobsPage() {
                     <td>{j.data_source_name ?? "—"}</td>
                     <td style={{ fontSize: "0.85rem" }}>{dashNum(j.priority)}</td>
                     <td
-                      className="snippet"
-                      style={{ fontSize: "0.7rem", maxWidth: "10rem" }}
+                      className={jobsTableStyles.tdJobParams}
                       title={j.job_params != null ? JSON.stringify(j.job_params) : undefined}
                     >
                       {jobParamsPreview(j.job_params)}

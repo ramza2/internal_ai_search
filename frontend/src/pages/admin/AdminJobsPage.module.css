@@ -1,0 +1,17 @@
+/* job_params: 긴 JSON 한 줄이 옆 컬럼으로 넘치지 않도록 */
+.thJobParams,
+.tdJobParams {
+  max-width: 14rem;
+  width: 14rem;
+  min-width: 8rem;
+  box-sizing: border-box;
+}
+
+.tdJobParams {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
