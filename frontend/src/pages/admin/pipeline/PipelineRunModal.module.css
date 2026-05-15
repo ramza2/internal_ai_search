@@ -101,3 +101,121 @@
   gap: 0.35rem 0.75rem;
   margin-top: 0.45rem;
 }
+
+.primaryPanel {
+  margin-top: 0.75rem;
+  padding: 1rem 1.15rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-primary-soft);
+  background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
+}
+
+.primaryPanelTitle {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-primary-dark);
+}
+
+.primaryCtaRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.65rem;
+}
+
+.stepSection {
+  margin-top: 1.25rem;
+}
+
+.stepSectionTitle {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+}
+
+.accordionItem {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.accordionHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.accordionHead:hover {
+  background: var(--color-bg-subtle);
+}
+
+.accordionHeadOpen {
+  background: var(--color-bg-subtle);
+}
+
+.stepNum {
+  flex-shrink: 0;
+  width: 1.65rem;
+  height: 1.65rem;
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-dark);
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stepHeadText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.stepHeadText strong {
+  font-size: 0.9rem;
+  color: var(--color-text);
+}
+
+.stepHeadDesc {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  line-height: 1.35;
+}
+
+.accordionHeadRight {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chevron {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+}
+
+.accordionBody {
+  padding: 0 1rem 1rem;
+  border-top: 1px solid var(--color-border);
+}

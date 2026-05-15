@@ -11,53 +11,59 @@
 .nav {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.2rem;
   padding: 1rem 0.75rem 1.5rem;
 }
 
 .sectionLabel {
-  font-size: 0.65rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   color: var(--color-text-muted);
-  padding: 0.75rem 0.75rem 0.4rem;
+  padding: 0.85rem 0.85rem 0.35rem;
+  text-transform: uppercase;
 }
 
 .adminBlock {
-  margin-top: 0.5rem;
-  padding-top: 0.75rem;
+  margin-top: 0.35rem;
+  padding-top: 0.65rem;
   border-top: 1px solid var(--color-border);
 }
 
 .link {
   display: flex;
   align-items: center;
-  gap: 0.65rem;
-  padding: 0.55rem 0.75rem;
+  gap: 0.75rem;
+  padding: 0.6rem 0.85rem;
   font-size: 0.875rem;
   color: var(--color-text);
   text-decoration: none;
-  border-radius: var(--radius-md);
-  border-left: 3px solid transparent;
+  border-radius: var(--radius-lg);
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .link:hover {
   background: var(--color-bg-subtle);
+  color: var(--color-text);
 }
 
 .link.active {
   background: var(--color-primary-soft);
-  border-left-color: var(--color-primary);
-  color: var(--color-primary-dark);
+  color: var(--color-primary);
   font-weight: 600;
+}
+
+.link.active .icon {
+  color: var(--color-primary);
+  opacity: 1;
 }
 
 .icon {
   width: 1.15rem;
   height: 1.15rem;
   flex-shrink: 0;
-  opacity: 0.85;
+  opacity: 0.75;
+  color: inherit;
 }
 
 @media (max-width: 900px) {

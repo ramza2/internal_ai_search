@@ -8,6 +8,31 @@ Vite + React + TypeScript 기반 웹 UI. 백엔드(FastAPI)와 JWT 인증으로 
 - Make 프로젝트는 Tailwind·shadcn 기반이지만, 본 레포는 **도입하지 않고** 동일한 정보 구조를 **CSS 변수 + CSS Module + 공통 `src/components/ui`** 로 이식했습니다.
 - 디자인 URL: `https://www.figma.com/make/K22EXxnQSYPvcWOmEUuvMQ/Internal-Knowledge-AI-Search-UI--%EB%B3%B5%EC%82%AC-?p=f&t=fznfbJPE3rXiMl3h-0`
 
+## 2차 UI/UX 패치 (2026-05)
+
+Figma 톤에 맞춘 **관리자·파이프라인 화면** 정리입니다. API·라우팅·권한·기능 범위는 변경하지 않았습니다.
+
+### 사이드바 (`Sidebar.tsx` / `Sidebar.module.css`)
+
+- 활성 메뉴: **pill 스타일** (`border-radius: var(--radius-lg)`, `primary-soft` 배경, primary 텍스트·아이콘).
+- 라벨 단축: 검색, AI 질문, 대시보드, **저장소**, 파일 현황, 작업 이력, 사용자, 감사 로그.
+- 섹션 구분: **메뉴** / **관리자**. 경로(`/search`, `/admin/data-sources` 등)는 기존과 동일.
+- **TODO:** 모바일 햄버거·오버레이 사이드바(현재는 데스크톱 고정 레이아웃).
+
+### 검색 반영 파이프라인 모달 (`PipelineRunModal`)
+
+- 상단 **권장: 전체 작업 등록** 패널 + 실행 모드(바로 실행 / 백그라운드 실행).
+- 주 CTA: 백그라운드 → **전체 작업 등록**(primary) + **브라우저에서 순차 등록**(outline); 즉시 → **바로 전체 실행**.
+- **실행 옵션·진행 상세** `AdvancedSection`: 백그라운드 Job 요약·자동 새로고침, 즉시 실행 진행 바·단계 카드, 마지막 단계 요약, 파일 현황.
+- **단계별 실행**: 5단계 **아코디언**(한 번에 하나만 펼침). 헤더에 단계 번호·한글 라벨·`PIPELINE_STEP_DESCRIPTIONS` 요약·단계/Job 상태 배지. 단계 내부 고급 옵션·버튼·`BackgroundJobSection`·`DocumentProcessingPanel`은 유지.
+- 등록 성공 시 작업 ID는 **고급 정보** 접기 영역에만 표시.
+
+### 저장소 관리 (`DataSourcesPage`)
+
+- 행 액션 우선순위: **검색 반영**(primary) → **접속 확인**(outline) → **설정**(secondary).
+- **사용 / 사용 중지**는 `<details>추가 옵션</details>` 안으로 이동.
+- 표·폼 문구: **저장소** 용어 통일(주소, 시작 폴더 등).
+
 ## 현재 UI 구조
 
 - **디자인 토큰:** `src/styles/global.css`의 `:root` 변수(`--color-primary`, `--color-bg`, `--color-surface`, `--color-muted`, `--color-danger`, `--radius-*`, `--shadow-card` 등).
@@ -139,14 +164,12 @@ npm run preview
 
 ## 인덱싱 파이프라인 실행 UI (`/admin/data-sources`)
 
-- 각 데이터 소스 행의 **파이프라인 실행** → 오버레이 **`PipelineRunModal`**에서 (1) `sync-tree` (2) `process-pending-text` (3) `process-pending-documents` — 공통 `DocumentProcessingPanel` (4) `chunk-completed-text` (5) `embed-pending-chunks` 를 단계별로 다룹니다.
+- 각 **저장소** 행의 **검색 반영** → 오버레이 **`PipelineRunModal`**에서 (1) `sync-tree` (2) `process-pending-text` (3) `process-pending-documents` — `DocumentProcessingPanel` (4) `chunk-completed-text` (5) `embed-pending-chunks` 를 **아코디언 단계**로 다룹니다.
 - **실행 모드 (기본: 백그라운드 실행)**
-  - **즉시 실행:** 각 단계가 **동기** `POST /api/data-sources/{id}/...` 를 호출하며, 브라우저가 응답이 올 때까지 기다립니다. **권장 순서로 전체 실행**도 이 모드에서만 표시되며, 기존과 같이 5단계를 순차 HTTP로 실행합니다.
-  - **백그라운드 실행:** 실제 작업 등록은 `src/api/adminJobsApi.ts`의 **`postAdminPipelineJob`**(권장, **`POST /api/admin/pipeline-jobs`**) 또는 **`postAdminSyncTreeJob`**, **`postAdminProcessPendingTextJob`**, **`postAdminProcessPendingDocumentsJob`**, **`postAdminChunkCompletedTextJob`**, **`postAdminEmbedPendingChunksJob`** 으로 각각 **`POST /api/admin/jobs/...`** 에 대응합니다. **대상 확인(dry_run)** 은 동기 API 그대로 사용합니다. 개별 Job 경로에서는 Job 생성 후 **`getAdminJob`** 으로 단계 카드에 상태·`progress_percent` 등을 표시합니다. **`PIPELINE`** 부모는 **`getAdminJobChildren`** 으로 하위 Job 목록을 `/admin/jobs` 상세에서 볼 수 있습니다. **상태 새로고침** 버튼과, 기본 꺼짐인 **자동 새로고침(5초)** 체크박스가 있으며, 모달을 닫으면 자동 폴링이 중지됩니다. **`POST /api/admin/jobs/{job_id}/cancel`** 은 `/admin/jobs` 와 동일 정책( **취소** / **취소 요청** / **취소 요청 중** )으로 단계 카드에서 호출할 수 있습니다.
-  - **서버 파이프라인(권장):** **서버 파이프라인 Job 생성** 은 모달에 입력한 옵션으로 **`postAdminPipelineJob`** 을 호출합니다. worker가 부모 **`PIPELINE`** Job을 잡은 뒤 하위 Job을 순차 등록하므로 **브라우저를 닫아도** 인덱싱 단계가 이어집니다. 생성 직후에는 **`pipeline_job_id`** 안내와 **`/admin/jobs`** 링크 위주로 안내하며, **진행률·단계별 상태·하위 Job 상세**는 작업 목록의 PIPELINE 상세(및 대시보드의 최근 파이프라인)에서 확인하는 흐름입니다. **`getAdminJobChildren`** 즉시 호출은 하지 않아도 됩니다.
-  - **브라우저 순차 Job 등록 (레거시):** **브라우저 순차 Job 등록** 은 **parent 없이** 브라우저가 Job을 하나씩 만들고, 이전 단계가 **`COMPLETED`** 또는 **`PARTIAL`** 이 될 때까지 **`getAdminJob`** 으로 5초 간격 폴링한 뒤 다음 단계를 등록합니다. **`FAILED`** / **`CANCELLED`** 이면 중단합니다. **`CANCELLING`** 은 계속 대기합니다(백엔드가 종료 상태로 바꿀 때까지). **HTTP 오류** 시에도 중단됩니다. **`/admin/jobs`** 목록에는 서로 독립인 Job이 최대 5개까지 올라갑니다. **한계:** 브라우저 탭을 닫거나 새로고침하면 **이미 생성된 Job은 worker에서 계속**될 수 있지만, **아직 등록되지 않은 다음 단계는 자동으로 만들어지지 않을 수 있습니다.**
+  - **바로 실행:** 각 단계는 동기 `POST /api/data-sources/{id}/...` 를 호출합니다. 상단 **바로 전체 실행**으로 5단계를 순차 HTTP 실행합니다(옵션은 카드 입력값, 자동 실행 시 `dry_run=false` 강제).
+  - **백그라운드 실행:** **전체 작업 등록** → `postAdminPipelineJob` (`POST /api/admin/pipeline-jobs`, 권장). **브라우저에서 순차 등록** → 브라우저가 단계별 `POST /api/admin/jobs/...` 를 순차 등록(레거시, 탭 종료 시 미등록 단계 중단 가능). **대상 확인(dry_run)** 은 동기 API. 단계별 Job 상태는 **`getAdminJob`** 폴링·**상태 새로고침**·**자동 새로고침(5초)** (`AdvancedSection` 안). 취소는 `/admin/jobs` 와 동일 정책.
+  - 진행·`pipeline_job_id`·하위 Job 상세는 **`/admin/jobs`**(및 대시보드 최근 파이프라인)에서 확인합니다. 모달에는 요약 안내와 **고급 정보**의 작업 ID만 둡니다.
 - **dry_run:** 텍스트·문서·Chunk·Embedding 단계의 **대상 확인** 버튼은 서버가 대상만 계산하고 DB/다운로드를 바꾸지 않는 호출입니다. **즉시 실행** 모드에서 **실제 실행**은 DB·파일 처리가 일어날 수 있으며 공통 확인 다이얼로그를 거칩니다. **sync-tree**는 dry_run이 없으므로 **동기화 실행**(즉시 모드) 또는 **동기화 Job 생성**(백그라운드 모드) 전에 옵션을 확인하세요.
-- **권장 순서로 전체 실행 (즉시 모드):** 모달 상단 버튼으로 위 5단계를 **브라우저에서 순차 호출**합니다. 각 카드에 입력한 옵션(limit, 경로, 확장자 등)은 그대로 쓰이며, **자동 실행만 `dry_run=false`로 강제**됩니다(카드에 dry_run이 켜져 있어도 무시). 자동 실행 전에는 단계별 **대상 확인(dry_run)** 을 권장합니다.
 - **중간 실패 (즉시 자동):** 어느 단계든 HTTP 오류·예외·또는 응답 `status === "error"` 이면 그 단계는 `error`, 이후 단계는 `skipped` 로 표시하고 자동 실행을 중단합니다. 응답 `status === "partial"` 인 경우에는 경고 문구를 남기고 **다음 단계는 계속 진행**합니다(`failed_count`가 커도 동일).
 - **진행·소요 시간:** **즉시 실행** 자동 실행 중 상단에 완료 수·현재 단계·실패/건너뜀 수·프로그레스 바를 표시하고, 단계별 카드에 시작/종료 시각·`formatDuration(ms)` 기반 소요 시간을 표시합니다.
 - **즉시 실행 한계:** 백그라운드 큐가 아니라 **탭이 열려 있는 동안의 순차 HTTP 요청**입니다.
@@ -189,10 +212,12 @@ curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-docume
 
 ## 아직 남은 TODO (프론트)
 
-- **URL query state**와 필터·페이지(offset) 동기화 — 작업 로그·사용자 관리 등에 TODO 주석으로 표시해 두었습니다.
-- 인덱싱 파이프라인 **parent/child pipeline job**(`scan_jobs.parent_job_id` 기반 서버 오케스트레이션)과 브라우저 없이 이어지는 순차 Job 등록 등은 미구현입니다.
+- **URL query state**와 필터·페이지(offset) 동기화 — 작업 로그·사용자 관리 등.
+- **모바일 사이드바**(햄버거·오버레이) — 2차 패치에서 스타일만 반영.
+- 관리자 **온보딩**(첫 방문 시 저장소 연결·검색 반영 안내).
+- 파이프라인 **실패 후 재개** UX(실패 단계부터 이어 실행 등) — 현재는 작업 이력에서 재시도·수동 단계 실행.
+- **HWP** 지원 정책 UI(미지원 안내·HWPX 권장) 강화.
 - **차트 라이브러리** 도입(파일 통계 시각화).
-- **모바일 햄버거 메뉴** 등 본격 반응형.
 - 미리보기 **쿼리 하이라이트** 정밀(offset 기반).
 - 백엔드 **소스별 사용자 권한(ACL)** 도입 시 검색용 목록 API에서 행 필터링.
 

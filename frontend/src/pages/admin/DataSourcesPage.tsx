@@ -17,6 +17,7 @@ import {
 import type { DataSource, DataSourceUpdateBody, SourceType } from "@/types/dataSource";
 import { formatDateTime } from "@/utils/format";
 import { PipelineRunModal } from "./pipeline/PipelineRunModal";
+import styles from "./DataSourcesPage.module.css";
 
 const WEBDAV_SOURCE_TYPES: SourceType[] = ["OWNCLOUD", "NEXTCLOUD", "GENERIC_WEBDAV"];
 
@@ -173,7 +174,7 @@ export function DataSourcesPage() {
     }
     const rootTrim = editForm.webdav_root_path.trim();
     if (WEBDAV_SOURCE_TYPES.includes(editForm.source_type) && !rootTrim) {
-      setFlash("WebDAV 계열 유형은 WebDAV 루트 경로가 필요합니다.", "danger");
+      setFlash("WebDAV 계열 유형은 시작 폴더 경로가 필요합니다.", "danger");
       return;
     }
     setEditSaving(true);
@@ -299,7 +300,7 @@ export function DataSourcesPage() {
               borderRadius: 8,
             }}
           >
-            <p style={{ gridColumn: "1 / -1", margin: 0, fontWeight: 600 }}>선택한 소스 수정</p>
+            <p style={{ gridColumn: "1 / -1", margin: 0, fontWeight: 600 }}>저장소 설정</p>
             <FormField label="저장소 이름">
               <Input
                 value={editForm.name}
@@ -386,8 +387,8 @@ export function DataSourcesPage() {
             <tr>
               <th>이름</th>
               <th>유형</th>
-              <th>서버</th>
-              <th>루트</th>
+              <th>저장소 주소</th>
+              <th>시작 폴더</th>
               <th>상태</th>
               <th>접속 확인</th>
               <th style={{ minWidth: "14rem" }} />
@@ -402,7 +403,7 @@ export function DataSourcesPage() {
                 </td>
                 <td className="snippet">{ds.server_url}</td>
                 <td className="snippet">{ds.webdav_root_path ?? "—"}</td>
-                <td>{ds.is_active ? <Badge variant="success">사용</Badge> : <Badge variant="default">중지</Badge>}</td>
+                <td>{ds.is_active ? <Badge variant="success">사용</Badge> : <Badge variant="neutral">사용 중지</Badge>}</td>
                 <td>
                   {formatDateTime(ds.last_connection_test_at)}
                   <div style={{ marginTop: "0.25rem" }}>
@@ -422,37 +423,44 @@ export function DataSourcesPage() {
                     </div>
                   )}
                 </td>
-                <td className="rowActions">
-                  <Button
-                    type="button"
-                    variant={editingId === ds.id ? "primary" : "secondary"}
-                    size="sm"
-                    onClick={() => openEdit(ds)}
-                  >
-                    설정 수정
-                  </Button>
-                  <Button type="button" variant="primary" size="sm" onClick={() => setPipelineSource(ds)}>
-                    검색 반영 실행
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => testOne(ds.id)}
-                    loading={testingId === ds.id}
-                    disabled={testingId !== null && testingId !== ds.id}
-                  >
-                    접속 확인
-                  </Button>
-                  {ds.is_active ? (
-                    <Button type="button" variant="ghost" size="sm" onClick={() => toggleActive(ds, false)}>
-                      사용 중지
+                <td>
+                  <div className={styles.rowActionsPrimary}>
+                    <Button type="button" variant="primary" size="sm" onClick={() => setPipelineSource(ds)}>
+                      검색 반영
                     </Button>
-                  ) : (
-                    <Button type="button" variant="primary" size="sm" onClick={() => toggleActive(ds, true)}>
-                      사용
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => testOne(ds.id)}
+                      loading={testingId === ds.id}
+                      disabled={testingId !== null && testingId !== ds.id}
+                    >
+                      접속 확인
                     </Button>
-                  )}
+                    <Button
+                      type="button"
+                      variant={editingId === ds.id ? "primary" : "secondary"}
+                      size="sm"
+                      onClick={() => openEdit(ds)}
+                    >
+                      설정
+                    </Button>
+                  </div>
+                  <details className={styles.moreDetails}>
+                    <summary>추가 옵션</summary>
+                    <div className={styles.moreDetailsBody}>
+                      {ds.is_active ? (
+                        <Button type="button" variant="ghost" size="sm" onClick={() => toggleActive(ds, false)}>
+                          사용 중지
+                        </Button>
+                      ) : (
+                        <Button type="button" variant="secondary" size="sm" onClick={() => toggleActive(ds, true)}>
+                          사용
+                        </Button>
+                      )}
+                    </div>
+                  </details>
                 </td>
               </tr>
             ))}

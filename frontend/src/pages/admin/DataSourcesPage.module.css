@@ -1,0 +1,35 @@
+.rowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.rowActionsPrimary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.moreDetails {
+  margin-top: 0.35rem;
+}
+
+.moreDetails summary {
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  list-style: none;
+}
+
+.moreDetails summary::-webkit-details-marker {
+  display: none;
+}
+
+.moreDetailsBody {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}

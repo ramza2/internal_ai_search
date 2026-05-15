@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import * as adminJobsApi from "@/api/adminJobsApi";
 import * as dsApi from "@/api/dataSourceApi";
@@ -11,7 +11,6 @@ import {
   Button,
   ConfirmDialog,
   FormField,
-  HelpText,
   InfoBox,
   Input,
   SectionCard,
@@ -36,7 +35,7 @@ import type {
   PipelineBackgroundStepId,
 } from "@/types/pipelineBackground";
 import { formatDateTime, formatDuration, formatInt } from "@/utils/format";
-import { getJobStatusBadgeVariant, getJobTypeLabel } from "@/utils/jobLabels";
+import { getJobStatusBadgeVariant, getJobStatusLabel, getJobTypeLabel } from "@/utils/jobLabels";
 import {
   DocumentProcessingPanel,
   type DocumentPipelineFormSnapshot,
@@ -70,6 +69,14 @@ const STEP_TO_AUTO_KEY: Record<StepId, PipelineAutoStepKey> = {
 };
 
 const STEPS_ORDER: StepId[] = ["sync", "text", "doc", "chunk", "embed"];
+
+const STEP_DESC_KEY: Record<StepId, keyof typeof PIPELINE_STEP_DESCRIPTIONS> = {
+  sync: "sync",
+  text: "text",
+  doc: "document",
+  chunk: "chunk",
+  embed: "embedding",
+};
 
 /**
  * 자동 실행 중단 여부: HTTP 오류, 예외, 또는 응답 body의 status === "error" 일 때만 중단.
@@ -170,6 +177,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
   const [stats, setStats] = useState<FileStatsResponse | null>(null);
   const [statsError, setStatsError] = useState("");
   const [statsLoading, setStatsLoading] = useState(false);
+  const [openStep, setOpenStep] = useState<StepId | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmAutoOpen, setConfirmAutoOpen] = useState(false);
   const [pendingRun, setPendingRun] = useState<null | (() => Promise<void>)>(null);
@@ -1029,18 +1037,16 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
             }
           >
             <InfoBox title={`저장소: ${dataSource.name}`}>
-              저장소의 파일을 수집하고 내용을 분석한 뒤, AI 검색에 반영합니다. 파일이 많을 경우{" "}
-              <strong>백그라운드 실행</strong>을 권장합니다. 브라우저를 닫아도 서버에서 작업이 계속 진행됩니다.
+              저장소의 파일을 수집하고 내용을 분석한 뒤, AI 검색에 반영합니다.
             </InfoBox>
-            <ul className="muted" style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem", fontSize: "0.875rem" }}>
-              <li>각 단계는 따로 실행할 수 있습니다. 대량 작업 전에는 <strong>대상 확인</strong>을 권장합니다.</li>
-              <li>
-                <strong>대상 확인</strong>은 실제로 저장하지 않고 처리 대상만 확인합니다. <strong>실제 실행</strong>은 DB 상태를 바꿀 수 있습니다.
-              </li>
-              <li>파일 목록 수집(1단계)은 대상 확인이 없습니다. 실행 전 범위를 확인하세요.</li>
-            </ul>
 
-            <div className={styles.execModeRow} role="radiogroup" aria-label="실행 모드">
+            <div className={styles.primaryPanel}>
+              <h3 className={styles.primaryPanelTitle}>권장: 전체 작업 등록</h3>
+              <p className="muted" style={{ margin: 0, fontSize: "0.85rem" }}>
+                브라우저를 닫아도 서버에서 계속 처리됩니다. 파일이 많으면 <strong>백그라운드 실행</strong>을 선택하세요.
+              </p>
+
+            <div className={styles.execModeRow} role="radiogroup" aria-label="실행 모드" style={{ marginTop: "0.75rem" }}>
               <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>실행 모드</span>
               <label className={styles.check}>
                 <input
@@ -1074,11 +1080,63 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
               )}
             </p>
 
+            <div className={styles.primaryCtaRow}>
+              {executionMode === "background" ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    loading={serverPipelineBusy}
+                    disabled={disableManualActions}
+                    onClick={() => setConfirmServerPipelineOpen(true)}
+                  >
+                    전체 작업 등록
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={disableManualActions}
+                    onClick={() => setConfirmBgAutoOpen(true)}
+                  >
+                    브라우저에서 순차 등록
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  disabled={disableManualActions}
+                  onClick={() => setConfirmAutoOpen(true)}
+                >
+                  바로 전체 실행
+                </Button>
+              )}
+            </div>
+            {executionMode === "background" && serverPipelineJobId ? (
+              <div className="alert alertSuccess" style={{ fontSize: "0.85rem", marginTop: "0.5rem" }}>
+                <strong>전체 검색 반영 작업이 등록되었습니다.</strong>
+                <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
+                  진행 상황은 <Link to="/admin/jobs">작업 이력</Link>에서 확인하세요.
+                </p>
+                <AdvancedSection title="고급 정보" summary="작업 ID">
+                  <p className="muted" style={{ margin: 0, fontSize: "0.8rem" }}>
+                    작업 ID: <code>{serverPipelineJobId}</code>
+                  </p>
+                </AdvancedSection>
+              </div>
+            ) : null}
+            {executionMode === "background" && <ErrorMessage message={serverPipelineErr} />}
+            </div>
+
+            <AdvancedSection title="실행 옵션·진행 상세" summary="백그라운드 상태, 즉시 실행 진행률, 파일 현황">
             {executionMode === "background" && (
               <div className={styles.bgToolBar}>
                 <div className="muted" style={{ fontSize: "0.8rem", display: "flex", flexWrap: "wrap", gap: "0.5rem 1rem" }}>
                   <span>
-                    생성된 Job: <strong>{bgSummary.created}</strong>
+                    생성된 작업: <strong>{bgSummary.created}</strong>
                   </span>
                   <span>
                     완료: <strong>{bgSummary.completed}</strong>
@@ -1116,75 +1174,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
               </div>
             )}
 
-            {executionMode === "immediate" && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.75rem", alignItems: "center" }}>
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  disabled={disableManualActions}
-                  onClick={() => setConfirmAutoOpen(true)}
-                >
-                  권장 순서로 전체 실행
-                </Button>
-                <span className="muted" style={{ fontSize: "0.8rem", maxWidth: "28rem" }}>
-                  WebDAV 동기화부터 Embedding 생성까지 순차 실행합니다. 중간 단계가 실패하면 다음 단계는 실행하지 않습니다.
-                </span>
-              </div>
-            )}
-
-            {executionMode === "background" && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem", marginTop: "0.75rem" }}>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-                  <Button
-                    type="button"
-                    variant="primary"
-                    size="sm"
-                    loading={serverPipelineBusy}
-                    disabled={disableManualActions}
-                    onClick={() => setConfirmServerPipelineOpen(true)}
-                  >
-                    전체 작업 등록 (권장)
-                  </Button>
-                  <span className="muted" style={{ fontSize: "0.8rem", maxWidth: "32rem" }}>
-                    5단계를 한 번에 등록합니다. 서버가 순서대로 처리하며, 브라우저를 닫아도 이어집니다.
-                  </span>
-                </div>
-                <ErrorMessage message={serverPipelineErr} />
-                {serverPipelineJobId ? (
-                  <div className="alert alertSuccess" style={{ fontSize: "0.85rem" }}>
-                    <strong>서버 파이프라인 Job이 등록되었습니다.</strong>
-                    <ul style={{ margin: "0.45rem 0 0", paddingLeft: "1.15rem", fontSize: "0.82rem" }}>
-                      <li>
-                        <strong>pipeline_job_id:</strong> <code style={{ fontSize: "0.8rem" }}>{serverPipelineJobId}</code>
-                      </li>
-                      <li>
-                        상태·진행률·단계별 하위 Job은{" "}
-                        <Link to="/admin/jobs">/admin/jobs (작업 목록)</Link>에서 확인하세요.
-                      </li>
-                      <li>브라우저를 닫아도 DB worker가 파이프라인을 이어서 처리합니다.</li>
-                      <li>진행률과 하위 단계는 작업 목록의 PIPELINE 상세에서 확인하는 것이 가장 정확합니다.</li>
-                    </ul>
-                  </div>
-                ) : null}
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    disabled={disableManualActions}
-                    onClick={() => setConfirmBgAutoOpen(true)}
-                  >
-                    브라우저에서 단계별 등록 (레거시)
-                  </Button>
-                  <span className="muted" style={{ fontSize: "0.8rem", maxWidth: "32rem" }}>
-                    단계마다 개별 작업을 브라우저가 등록합니다. 브라우저를 닫으면 이후 단계 등록이 중단될 수 있습니다.
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {executionMode === "immediate" && autoRunning && (
+                        {executionMode === "immediate" && autoRunning && (
               <div className={styles.autoProgressWrap}>
                 <div className={styles.autoProgressMeta}>
                   <span>
@@ -1315,11 +1305,24 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                 {formatInt(stats.by_analysis_status.find((x) => x.status === "SKIPPED")?.count ?? 0)}
               </p>
             )}
+            </AdvancedSection>
           </SectionCard>
 
-          <div className={styles.stepStack}>
-            <SectionCard title={STEP_LABEL.sync}>
-              <HelpText>{PIPELINE_STEP_DESCRIPTIONS.sync}</HelpText>
+          <div className={styles.stepSection}>
+            <h3 className={styles.stepSectionTitle}>단계별 실행</h3>
+            <p className="muted" style={{ margin: "0 0 0.5rem", fontSize: "0.85rem" }}>
+              필요한 단계만 펼쳐 실행하세요. 대량 작업 전에는 <strong>대상 확인</strong>을 권장합니다.
+            </p>
+          <div className={styles.accordion}>
+            <PipelineStepAccordion
+              stepId="sync"
+              stepIndex={1}
+              open={openStep === "sync"}
+              onToggle={() => setOpenStep((s) => (s === "sync" ? null : "sync"))}
+              snap={snap.sync}
+              bgStep={executionMode === "background" ? bgSteps.sync : undefined}
+              executionMode={executionMode}
+            >
               <AdvancedSection title="고급 설정" summary="폴더 깊이·항목 수·숨김 파일 등">
               <div className="formGrid" style={{ maxWidth: 640 }}>
                 <FormField label="시작 폴더">
@@ -1421,10 +1424,17 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                 />
               )}
               <StepResultBlock snap={snap.sync} />
-            </SectionCard>
+            </PipelineStepAccordion>
 
-            <SectionCard title={STEP_LABEL.text}>
-              <HelpText>{PIPELINE_STEP_DESCRIPTIONS.text}</HelpText>
+            <PipelineStepAccordion
+              stepId="text"
+              stepIndex={2}
+              open={openStep === "text"}
+              onToggle={() => setOpenStep((s) => (s === "text" ? null : "text"))}
+              snap={snap.text}
+              bgStep={executionMode === "background" ? bgSteps.text : undefined}
+              executionMode={executionMode}
+            >
               <AdvancedSection title="고급 설정" summary="처리 건수·파일 크기·확장자">
               <div className="formGrid" style={{ maxWidth: 640 }}>
                 <FormField label="한 번에 처리할 파일 수">
@@ -1522,10 +1532,17 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                 />
               )}
               <StepResultBlock snap={snap.text} />
-            </SectionCard>
+            </PipelineStepAccordion>
 
-            <SectionCard title={STEP_LABEL.doc}>
-              <HelpText>{PIPELINE_STEP_DESCRIPTIONS.document}</HelpText>
+            <PipelineStepAccordion
+              stepId="doc"
+              stepIndex={3}
+              open={openStep === "doc"}
+              onToggle={() => setOpenStep((s) => (s === "doc" ? null : "doc"))}
+              snap={snap.doc}
+              bgStep={executionMode === "background" ? bgSteps.doc : undefined}
+              executionMode={executionMode}
+            >
               <DocumentProcessingPanel
                 dataSourceId={dataSource.id}
                 dataSourceName={dataSource.name}
@@ -1561,10 +1578,17 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                 </>
               )}
               <StepResultBlock snap={snap.doc} />
-            </SectionCard>
+            </PipelineStepAccordion>
 
-            <SectionCard title={STEP_LABEL.chunk}>
-              <HelpText>{PIPELINE_STEP_DESCRIPTIONS.chunk}</HelpText>
+            <PipelineStepAccordion
+              stepId="chunk"
+              stepIndex={4}
+              open={openStep === "chunk"}
+              onToggle={() => setOpenStep((s) => (s === "chunk" ? null : "chunk"))}
+              snap={snap.chunk}
+              bgStep={executionMode === "background" ? bgSteps.chunk : undefined}
+              executionMode={executionMode}
+            >
               <AdvancedSection title="고급 설정" summary="단위 크기·겹침·재처리">
               <div className="formGrid" style={{ maxWidth: 640 }}>
                 <FormField label="한 번에 처리할 파일 수">
@@ -1693,10 +1717,17 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                 />
               )}
               <StepResultBlock snap={snap.chunk} />
-            </SectionCard>
+            </PipelineStepAccordion>
 
-            <SectionCard title={STEP_LABEL.embed}>
-              <HelpText>{PIPELINE_STEP_DESCRIPTIONS.embedding}</HelpText>
+            <PipelineStepAccordion
+              stepId="embed"
+              stepIndex={5}
+              open={openStep === "embed"}
+              onToggle={() => setOpenStep((s) => (s === "embed" ? null : "embed"))}
+              snap={snap.embed}
+              bgStep={executionMode === "background" ? bgSteps.embed : undefined}
+              executionMode={executionMode}
+            >
               <AdvancedSection title="고급 설정" summary="배치 크기·재인덱싱·확장자">
               <div className="formGrid" style={{ maxWidth: 640 }}>
                 <FormField label="한 번에 처리할 단위 수">
@@ -1802,7 +1833,8 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                 />
               )}
               <StepResultBlock snap={snap.embed} />
-            </SectionCard>
+            </PipelineStepAccordion>
+          </div>
           </div>
         </div>
       </div>
@@ -1822,7 +1854,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
 
       <ConfirmDialog
         open={confirmAutoOpen}
-        title="전체 파이프라인 실행"
+        title="바로 전체 실행"
         message={AUTO_CONFIRM_MSG}
         confirmLabel="계속"
         cancelLabel="취소"
@@ -1835,7 +1867,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
 
       <ConfirmDialog
         open={confirmBgAutoOpen}
-        title="백그라운드 파이프라인 (브라우저 순차)"
+        title="브라우저에서 순차 등록"
         message={BG_AUTO_CONFIRM_MSG}
         confirmLabel="계속"
         cancelLabel="취소"
@@ -1848,7 +1880,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
 
       <ConfirmDialog
         open={confirmServerPipelineOpen}
-        title="서버 파이프라인"
+        title="전체 작업 등록"
         message={SERVER_PIPELINE_CONFIRM_MSG}
         confirmLabel="계속"
         cancelLabel="취소"
@@ -1872,6 +1904,81 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
       />
     </>,
     document.body
+  );
+}
+
+
+
+function stepSnapBadge(snap: StepSnap): ReactNode {
+  if (snap.status === "idle") return null;
+  const label =
+    snap.status === "success"
+      ? "완료"
+      : snap.status === "error"
+        ? "실패"
+        : snap.status === "loading"
+          ? "처리 중"
+          : snap.status;
+  const variant =
+    snap.status === "success"
+      ? "success"
+      : snap.status === "error"
+        ? "danger"
+        : snap.status === "loading"
+          ? "primary"
+          : "neutral";
+  return <Badge variant={variant}>{label}</Badge>;
+}
+
+function bgStepStatusBadge(status: string | undefined): ReactNode {
+  const u = (status || "").toUpperCase();
+  if (!u) return null;
+  return <Badge variant={getJobStatusBadgeVariant(u)}>{getJobStatusLabel(u)}</Badge>;
+}
+
+function PipelineStepAccordion({
+  stepId,
+  stepIndex,
+  open,
+  onToggle,
+  snap,
+  bgStep,
+  executionMode,
+  children,
+}: {
+  stepId: StepId;
+  stepIndex: number;
+  open: boolean;
+  onToggle: () => void;
+  snap: StepSnap;
+  bgStep?: BackgroundPipelineStepState;
+  executionMode: ExecutionMode;
+  children: ReactNode;
+}) {
+  const desc = PIPELINE_STEP_DESCRIPTIONS[STEP_DESC_KEY[stepId]];
+  return (
+    <div className={styles.accordionItem}>
+      <button
+        type="button"
+        className={`${styles.accordionHead} ${open ? styles.accordionHeadOpen : ""}`}
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        <span className={styles.stepNum}>{stepIndex}</span>
+        <span className={styles.stepHeadText}>
+          <strong>{STEP_LABEL[stepId]}</strong>
+          <span className={styles.stepHeadDesc}>{desc}</span>
+        </span>
+        <span className={styles.accordionHeadRight}>
+          {stepSnapBadge(snap)}
+          {executionMode === "background" && bgStep ? bgStepStatusBadge(bgStep.status) : null}
+          <span className={styles.chevron} aria-hidden>
+            {open ? "▲" : "▼"}
+          </span>
+        </span>
+      </button>
+      {open ? <div className={styles.accordionBody}>{children}</div> : null}
+    </div>
   );
 }
 

@@ -81,10 +81,10 @@ export function Sidebar() {
   return (
     <aside className={styles.sidebar}>
       <nav className={styles.nav}>
-        <div className={styles.sectionLabel}>사용자 메뉴</div>
+        <div className={styles.sectionLabel}>메뉴</div>
         <NavLink to="/search" className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ""}`}>
           <IconSearch className={styles.icon} />
-          통합 검색
+          검색
         </NavLink>
         <NavLink to="/answer" className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ""}`}>
           <IconChat className={styles.icon} />
@@ -93,39 +93,39 @@ export function Sidebar() {
 
         {isAdmin && (
           <div className={styles.adminBlock}>
-            <div className={styles.sectionLabel}>관리자 메뉴</div>
+            <div className={styles.sectionLabel}>관리자</div>
             <NavLink to="/admin" end className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ""}`}>
               <IconLayout className={styles.icon} />
-              관리자 대시보드
+              대시보드
             </NavLink>
             <NavLink
               to="/admin/data-sources"
               className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ""}`}
             >
               <IconSettings className={styles.icon} />
-              데이터 소스 설정
+              저장소
             </NavLink>
             <NavLink
               to="/admin/file-stats"
               className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ""}`}
             >
               <IconChart className={styles.icon} />
-              파일 현황 분석
+              파일 현황
             </NavLink>
             <NavLink to="/admin/jobs" className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ""}`}>
               <IconJobs className={styles.icon} />
-              작업 목록
+              작업 이력
             </NavLink>
             <NavLink to="/admin/users" className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ""}`}>
               <IconUsers className={styles.icon} />
-              사용자 관리
+              사용자
             </NavLink>
             <NavLink
               to="/admin/action-logs"
               className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ""}`}
             >
               <IconFileText className={styles.icon} />
-              작업 로그
+              감사 로그
             </NavLink>
           </div>
         )}
