@@ -19,7 +19,14 @@ import {
   Select,
 } from "@/components/ui";
 import { useDataSources } from "@/hooks/useDataSources";
-import type { AdminJob, AdminJobDetailResponse, AdminJobFailure, AdminJobFailuresResponse } from "@/types/adminJobs";
+import type {
+  AdminJob,
+  AdminJobChildItem,
+  AdminJobChildrenResponse,
+  AdminJobDetailResponse,
+  AdminJobFailure,
+  AdminJobFailuresResponse,
+} from "@/types/adminJobs";
 import { PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS } from "@/types/adminJobs";
 import { formatDateTime, formatDuration } from "@/utils/format";
 import { getJobStatusBadgeVariant, getJobTypeLabel } from "@/utils/jobLabels";
@@ -42,6 +49,7 @@ const JOB_TYPE_FILTER_CODES = [
   "MANUAL_SCAN",
   "WEBDAV_SYNC_ROOT",
   "WEBDAV_SYNC_TREE",
+  "PIPELINE",
   "PROCESS_PENDING_TEXT",
   "PROCESS_PENDING_DOCUMENTS",
   "CHUNK_COMPLETED_TEXT",
@@ -122,6 +130,11 @@ function canShowJobCancelButton(status: string | undefined): boolean {
 function canRetryJobStatus(status: string | undefined): boolean {
   const u = (status || "").toUpperCase();
   return u === "FAILED" || u === "CANCELLED" || u === "PARTIAL";
+}
+
+function canRetryAdminJob(j: AdminJob): boolean {
+  if ((j.job_type || "").toUpperCase() === "PIPELINE") return false;
+  return canRetryJobStatus(j.status);
 }
 
 function isRetryLimitReached(j: AdminJob): boolean {
@@ -222,6 +235,10 @@ export function AdminJobsPage() {
   const [retryBusy, setRetryBusy] = useState(false);
   const [retryFeedback, setRetryFeedback] = useState<string | null>(null);
   const [retryNewJobId, setRetryNewJobId] = useState<string | null>(null);
+
+  const [jobChildren, setJobChildren] = useState<AdminJobChildrenResponse | null>(null);
+  const [jobChildrenBusy, setJobChildrenBusy] = useState(false);
+  const [jobChildrenErr, setJobChildrenErr] = useState("");
 
   const fetchList = useCallback(async () => {
     setListBusy(true);
@@ -505,12 +522,28 @@ export function AdminJobsPage() {
     setModalJobId(jobId);
     setDetail(null);
     setDetailErr("");
+    setJobChildren(null);
+    setJobChildrenErr("");
     setFailures(null);
     setFailuresErr("");
     setDetailBusy(true);
     try {
       const d = await adminJobsApi.getAdminJob(jobId);
       setDetail(d);
+      if (d.job.job_type?.toUpperCase() === "PIPELINE") {
+        setJobChildrenBusy(true);
+        try {
+          const ch = await adminJobsApi.getAdminJobChildren(jobId);
+          setJobChildren(ch);
+        } catch (ec) {
+          setJobChildrenErr(getApiErrorMessage(ec));
+          setJobChildren(null);
+        } finally {
+          setJobChildrenBusy(false);
+        }
+      } else {
+        setJobChildren(null);
+      }
     } catch (e) {
       setDetailErr(getApiErrorMessage(e));
     } finally {
@@ -531,6 +564,8 @@ export function AdminJobsPage() {
     setModalJobId(null);
     setDetail(null);
     setDetailErr("");
+    setJobChildren(null);
+    setJobChildrenErr("");
     setFailures(null);
     setFailuresErr("");
     setRetryNewJobId(null);
@@ -542,6 +577,21 @@ export function AdminJobsPage() {
     try {
       const d = await adminJobsApi.getAdminJob(jobId);
       setDetail(d);
+      if (d.job.job_type?.toUpperCase() === "PIPELINE") {
+        setJobChildrenBusy(true);
+        setJobChildrenErr("");
+        try {
+          const ch = await adminJobsApi.getAdminJobChildren(jobId);
+          setJobChildren(ch);
+        } catch (ec) {
+          setJobChildrenErr(getApiErrorMessage(ec));
+          setJobChildren(null);
+        } finally {
+          setJobChildrenBusy(false);
+        }
+      } else {
+        setJobChildren(null);
+      }
     } catch (e) {
       setDetailErr(getApiErrorMessage(e));
     } finally {
@@ -1376,6 +1426,11 @@ export function AdminJobsPage() {
                   <tr key={j.id}>
                     <td>
                       <div>{getJobTypeLabel(j.job_type)}</div>
+                      {j.parent_job_id ? (
+                        <div className="muted" style={{ fontSize: "0.72rem" }}>
+                          하위 작업
+                        </div>
+                      ) : null}
                       <div className="muted" style={{ fontSize: "0.75rem" }}>
                         {j.job_type}
                       </div>
@@ -1443,7 +1498,7 @@ export function AdminJobsPage() {
                                 : "취소 요청"}
                           </Button>
                         )}
-                        {canRetryJobStatus(j.status) && (
+                        {canRetryAdminJob(j) && (
                           <>
                             {!isRetryLimitReached(j) ? (
                               <Button
@@ -1512,7 +1567,7 @@ export function AdminJobsPage() {
                           : "취소 요청"}
                     </Button>
                   )}
-                  {detail && canRetryJobStatus(detail.job.status) && (
+                  {detail && canRetryAdminJob(detail.job) && (
                     <>
                       {!isRetryLimitReached(detail.job) ? (
                         <Button
@@ -1669,6 +1724,65 @@ export function AdminJobsPage() {
                     </details>
                   )}
 
+                  {detail.job.job_type?.toUpperCase() === "PIPELINE" && (
+                    <Fragment>
+                      <h4 style={{ marginTop: "1rem", fontSize: "0.95rem" }}>하위 Job (파이프라인)</h4>
+                      {jobChildrenBusy && <p className="muted">하위 목록 불러오는 중…</p>}
+                      <ErrorMessage message={jobChildrenErr} />
+                      {jobChildren && jobChildren.items.length === 0 && !jobChildrenBusy ? (
+                        <p className="muted" style={{ fontSize: "0.85rem" }}>
+                          아직 등록된 하위 Job이 없습니다. worker가 부모를 처리하면 첫 단계 Job이 생성됩니다.
+                        </p>
+                      ) : null}
+                      {jobChildren && jobChildren.items.length > 0 ? (
+                        <DataTable>
+                          <thead>
+                            <tr>
+                              <th>유형</th>
+                              <th>단계</th>
+                              <th>status</th>
+                              <th>진행</th>
+                              <th>시작</th>
+                              <th>종료</th>
+                              <th />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {jobChildren.items.map((c: AdminJobChildItem) => (
+                              <tr key={c.id}>
+                                <td>
+                                  <div>{getJobTypeLabel(c.job_type)}</div>
+                                  <div className="muted" style={{ fontSize: "0.72rem" }}>
+                                    {c.job_type}
+                                  </div>
+                                </td>
+                                <td className="snippet" style={{ fontSize: "0.8rem" }}>
+                                  {dashStr(c.pipeline_step)}
+                                </td>
+                                <td>
+                                  <Badge variant={getJobStatusBadgeVariant(c.status)}>{c.status}</Badge>
+                                </td>
+                                <td>{c.progress_percent != null ? `${c.progress_percent}%` : "—"}</td>
+                                <td style={{ fontSize: "0.8rem" }}>{formatDateTime(c.started_at)}</td>
+                                <td style={{ fontSize: "0.8rem" }}>{formatDateTime(c.finished_at)}</td>
+                                <td>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => void openDetail(c.id)}
+                                  >
+                                    열기
+                                  </Button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </DataTable>
+                      ) : null}
+                    </Fragment>
+                  )}
+
                   <h4 style={{ marginTop: "1rem", fontSize: "0.95rem" }}>실패 목록</h4>
                   {failuresBusy && <p className="muted">실패 행 불러오는 중…</p>}
                   <ErrorMessage message={failuresErr} />
@@ -1715,7 +1829,11 @@ export function AdminJobsPage() {
       <ConfirmDialog
         open={cancelConfirmJob !== null}
         title="작업 취소"
-        message="이 작업에 취소 요청을 보냅니다. 실행 중인 작업은 다음 안전 지점에서 중단됩니다. 계속하시겠습니까?"
+        message={
+          cancelConfirmJob?.job_type?.toUpperCase() === "PIPELINE"
+            ? "파이프라인(부모) 작업을 취소하면 실행 중인 하위 Job에도 취소 요청이 전달됩니다. 하위 작업이 모두 종료되면 부모 작업이 취소 완료로 마무리됩니다. 계속하시겠습니까?"
+            : "이 작업에 취소 요청을 보냅니다. 실행 중인 작업은 다음 안전 지점에서 중단됩니다. 계속하시겠습니까?"
+        }
         confirmLabel="확인"
         cancelLabel="닫기"
         danger

@@ -5,7 +5,8 @@ the core sync flow can run even before the migration is applied. Failures here
 are swallowed deliberately and never block the calling request.
 
 Granular ``job_type`` values require migration ``021_scan_job_type_values.sql``
-on the database; otherwise ``create_scan_job`` may return ``None`` while the
+on the database; ``PIPELINE`` additionally requires ``023_scan_job_type_pipeline.sql``.
+Otherwise ``create_scan_job`` / ``enqueue_scan_job`` may return ``None`` while the
 caller continues.
 
 Worker-oriented helpers (``enqueue_scan_job``, ``dequeue_pending_job``,
@@ -309,6 +310,11 @@ def retry_scan_job(
 
                     new_rc = old_rc + 1
                     jt = str(row.get("job_type") or "").strip().upper() or JOB_TYPE_MANUAL_SCAN
+                    if jt == JOB_TYPE_PIPELINE:
+                        return {
+                            "result": "not_retryable",
+                            "message": "PIPELINE parent jobs cannot be retried from this API (see README)",
+                        }
 
                     raw_params = row.get("job_params")
                     base: dict[str, Any] = {}
@@ -554,6 +560,28 @@ def mark_job_completed(job_id: UUID, message: str | None = None) -> None:
         pass
 
 
+def mark_job_partial(job_id: UUID, message: str | None = None) -> None:
+    """Worker path: ``PARTIAL`` terminal state (pipeline or partial-success runs)."""
+    err_clean = _truncate_error_message(message)
+    stmt = """
+        UPDATE scan_jobs
+        SET status = 'PARTIAL'::scan_job_status,
+            finished_at = NOW(),
+            heartbeat_at = NOW(),
+            updated_at = NOW(),
+            current_file_path = NULL,
+            error_message = %s
+        WHERE id = %s
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(stmt, (err_clean, job_id))
+            conn.commit()
+    except Exception:
+        pass
+
+
 def mark_job_failed(job_id: UUID, error_message: str) -> None:
     """Worker path: ``FAILED`` with sanitized ``error_message`` and heartbeat."""
     msg = _truncate_error_message(error_message) or "Failed"
@@ -670,7 +698,12 @@ def request_job_cancel(*, job_id: UUID, reason: str | None = None) -> dict[str, 
             conn.row_factory = dict_row
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT status::text AS status FROM scan_jobs WHERE id = %s FOR UPDATE",
+                    """
+                    SELECT status::text AS status, job_type::text AS job_type
+                    FROM scan_jobs
+                    WHERE id = %s
+                    FOR UPDATE
+                    """,
                     (job_id,),
                 )
                 row = cur.fetchone()
@@ -683,6 +716,7 @@ def request_job_cancel(*, job_id: UUID, reason: str | None = None) -> dict[str, 
                         "message": "Job not found",
                     }
                 st = str(row.get("status") or "").strip().upper()
+                jt_upper = str(row.get("job_type") or "").strip().upper()
 
                 if st in ("COMPLETED", "FAILED", "CANCELLED", "PARTIAL"):
                     conn.rollback()
@@ -738,6 +772,10 @@ def request_job_cancel(*, job_id: UUID, reason: str | None = None) -> dict[str, 
                         (msg, job_id),
                     )
                     conn.commit()
+                    if jt_upper == JOB_TYPE_PIPELINE:
+                        from app.services import pipeline_jobs_service as _pjs
+
+                        _pjs.cancel_active_pipeline_children(job_id)
                     return {
                         "result": "ok",
                         "previous_status": "RUNNING",
@@ -790,6 +828,7 @@ def mark_stale_running_jobs(
             updated_at = NOW(),
             error_message = %s
         WHERE status = 'RUNNING'::scan_job_status
+          AND job_type::text <> 'PIPELINE'
           AND (
                 (heartbeat_at IS NOT NULL AND heartbeat_at < NOW() - (%s * INTERVAL '1 minute'))
              OR (heartbeat_at IS NULL AND started_at IS NOT NULL
@@ -807,6 +846,29 @@ def mark_stale_running_jobs(
         return int(n or 0)
     except Exception:
         return 0
+
+
+def update_scan_job_job_params(job_id: UUID, job_params: dict[str, Any] | None) -> None:
+    """Replace ``job_params`` JSON (sanitized). Used by pipeline advancement."""
+    clean = sanitize_job_params_for_storage(job_params)
+    if clean is None:
+        return
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE scan_jobs
+                    SET job_params = %s::jsonb,
+                        heartbeat_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (Json(clean), job_id),
+                )
+            conn.commit()
+    except Exception:
+        pass
 
 
 def update_job_heartbeat(job_id: UUID, worker_id: str) -> None:
@@ -839,6 +901,7 @@ JOB_TYPE_PROCESS_PENDING_TEXT = "PROCESS_PENDING_TEXT"
 JOB_TYPE_PROCESS_PENDING_DOCUMENTS = "PROCESS_PENDING_DOCUMENTS"
 JOB_TYPE_CHUNK_COMPLETED_TEXT = "CHUNK_COMPLETED_TEXT"
 JOB_TYPE_EMBED_PENDING_CHUNKS = "EMBED_PENDING_CHUNKS"
+JOB_TYPE_PIPELINE = "PIPELINE"
 
 _KNOWN_JOB_TYPES: frozenset[str] = frozenset(
     {
@@ -849,6 +912,7 @@ _KNOWN_JOB_TYPES: frozenset[str] = frozenset(
         JOB_TYPE_PROCESS_PENDING_DOCUMENTS,
         JOB_TYPE_CHUNK_COMPLETED_TEXT,
         JOB_TYPE_EMBED_PENDING_CHUNKS,
+        JOB_TYPE_PIPELINE,
     }
 )
 
@@ -975,6 +1039,7 @@ def fail_scan_job(*, job_id: UUID | None, error_message: str) -> None:
 __all__ = [
     "JOB_TYPE_CHUNK_COMPLETED_TEXT",
     "JOB_TYPE_EMBED_PENDING_CHUNKS",
+    "JOB_TYPE_PIPELINE",
     "JOB_TYPE_MANUAL_SCAN",
     "JOB_TYPE_PROCESS_PENDING_DOCUMENTS",
     "JOB_TYPE_PROCESS_PENDING_TEXT",
@@ -993,11 +1058,13 @@ __all__ = [
     "mark_job_cancelling",
     "mark_job_completed",
     "mark_job_failed",
+    "mark_job_partial",
     "mark_stale_running_jobs",
     "request_job_cancel",
     "retry_scan_job",
     "sanitize_job_params_for_response",
     "sanitize_job_params_for_storage",
     "update_job_heartbeat",
+    "update_scan_job_job_params",
     "update_scan_job_progress",
 ]

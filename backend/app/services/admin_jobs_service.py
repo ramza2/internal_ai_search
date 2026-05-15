@@ -13,6 +13,7 @@ from psycopg.rows import dict_row
 from app.db.database import get_db_connection
 from app.services.action_log_service import sanitize_error_message
 from app.services.scan_jobs_service import sanitize_job_params_for_response
+from app.schemas.admin_pipeline_jobs import AdminJobChildItem, AdminJobChildrenResponse
 from app.schemas.admin_jobs import (
     AdminJobDetailResponse,
     AdminJobFailureItem,
@@ -46,6 +47,7 @@ def _build_job_where(
     data_source_id: UUID | None,
     status: str | None,
     job_type: str | None,
+    parent_job_id: UUID | None,
     keyword: str | None,
     from_date: date | None,
     to_date: date | None,
@@ -63,6 +65,9 @@ def _build_job_where(
     if job_type and job_type.strip():
         parts.append("sj.job_type::text = %s")
         params.append(job_type.strip())
+    if parent_job_id is not None:
+        parts.append("sj.parent_job_id = %s")
+        params.append(parent_job_id)
     if keyword and keyword.strip():
         kw = f"%{keyword.strip()}%"
         parts.append(
@@ -163,6 +168,7 @@ def list_admin_jobs(
     data_source_id: UUID | None,
     status: str | None,
     job_type: str | None,
+    parent_job_id: UUID | None,
     keyword: str | None,
     from_date: str | None,
     to_date: str | None,
@@ -176,6 +182,7 @@ def list_admin_jobs(
         data_source_id=data_source_id,
         status=status,
         job_type=job_type,
+        parent_job_id=parent_job_id,
         keyword=keyword,
         from_date=fd,
         to_date=td,
@@ -289,6 +296,53 @@ def fetch_admin_job_detail(*, job_id: UUID) -> tuple[AdminJobDetailResponse | No
     )
 
 
+def list_admin_job_children(*, parent_job_id: UUID) -> tuple[AdminJobChildrenResponse | None, str | None]:
+    """Return direct child ``scan_jobs`` rows for a parent id (any parent job type)."""
+    try:
+        with get_db_connection() as conn:
+            conn.row_factory = dict_row
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM scan_jobs WHERE id = %s", (parent_job_id,))
+                if cur.fetchone() is None:
+                    return None, "not_found"
+
+                cols = _fetch_scan_jobs_columns(cur)
+                sel = _job_select_sql(cols)
+                cur.execute(
+                    f"""
+                    SELECT {sel}
+                    FROM scan_jobs sj
+                    LEFT JOIN data_sources ds ON ds.id = sj.data_source_id
+                    LEFT JOIN app_users au ON au.id = sj.requested_by
+                    WHERE sj.parent_job_id = %s
+                    ORDER BY sj.created_at ASC NULLS LAST, sj.started_at ASC NULLS LAST
+                    """,
+                    (parent_job_id,),
+                )
+                rows = cur.fetchall() or []
+    except psycopg.errors.UndefinedTable:
+        return None, "scan_jobs_missing"
+    except psycopg.Error:
+        logger.exception("list_admin_job_children failed")
+        return None, "db_error"
+
+    items: list[AdminJobChildItem] = []
+    for r in rows:
+        row = _normalize_job_row(dict(r))
+        items.append(
+            AdminJobChildItem(
+                id=row["id"],
+                job_type=str(row.get("job_type") or ""),
+                pipeline_step=row.get("pipeline_step"),
+                status=str(row.get("status") or ""),
+                started_at=row.get("started_at"),
+                finished_at=row.get("finished_at"),
+                progress_percent=row.get("progress_percent"),
+            )
+        )
+    return AdminJobChildrenResponse(parent_job_id=parent_job_id, items=items, total=len(items)), None
+
+
 def list_admin_job_failures(
     *,
     job_id: UUID,
@@ -358,6 +412,7 @@ def list_admin_job_failures(
 
 __all__ = [
     "fetch_admin_job_detail",
+    "list_admin_job_children",
     "list_admin_job_failures",
     "list_admin_jobs",
 ]

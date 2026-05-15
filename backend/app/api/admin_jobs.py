@@ -28,7 +28,11 @@ from app.schemas.admin_jobs import (
     PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS,
     PROCESS_PENDING_TEXT_DEFAULT_EXTENSIONS,
 )
-from app.services import admin_jobs_service, scan_jobs_service
+from app.schemas.admin_pipeline_jobs import (
+    AdminPipelineJobRequest,
+    AdminPipelineJobResponse,
+)
+from app.services import admin_jobs_service, pipeline_jobs_service, scan_jobs_service
 from app.services.action_log_service import write_action_log_safe
 
 router = APIRouter(prefix="/api/admin", tags=["admin-jobs"])
@@ -40,6 +44,7 @@ def admin_list_jobs(
     data_source_id: Annotated[UUID | None, Query(description="Filter by data source")] = None,
     status: Annotated[str | None, Query()] = None,
     job_type: Annotated[str | None, Query()] = None,
+    parent_job_id: Annotated[UUID | None, Query(description="Filter by parent scan_jobs.id")] = None,
     keyword: Annotated[str | None, Query()] = None,
     from_date: Annotated[str | None, Query(description="YYYY-MM-DD (created_at)")] = None,
     to_date: Annotated[str | None, Query(description="YYYY-MM-DD (created_at)")] = None,
@@ -51,6 +56,7 @@ def admin_list_jobs(
         data_source_id=data_source_id,
         status=status,
         job_type=job_type,
+        parent_job_id=parent_job_id,
         keyword=keyword,
         from_date=from_date,
         to_date=to_date,
@@ -79,6 +85,11 @@ def admin_test_enqueue_job(
             },
         )
     jt = (body.job_type or "").strip().upper() or scan_jobs_service.JOB_TYPE_WEBDAV_SYNC_TREE
+    if jt == scan_jobs_service.JOB_TYPE_PIPELINE:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "PIPELINE jobs cannot be created via test-enqueue"},
+        )
     if jt not in scan_jobs_service.KNOWN_JOB_TYPES:
         return JSONResponse(
             status_code=400,
@@ -105,6 +116,47 @@ def admin_test_enqueue_job(
             },
         )
     payload = AdminTestEnqueueResponse(job_id=jid)
+    return JSONResponse(status_code=200, content=payload.model_dump(mode="json"))
+
+
+@router.post("/pipeline-jobs", response_model=None)
+def admin_enqueue_pipeline_job(
+    request: Request,
+    body: AdminPipelineJobRequest,
+    ctx: CurrentUserContext = Depends(require_admin_user),
+) -> JSONResponse:
+    """Queue a server-driven **PIPELINE** parent job (worker advances child jobs sequentially)."""
+    assert body.steps is not None
+    jid = pipeline_jobs_service.enqueue_pipeline_job(
+        data_source_id=body.data_source_id,
+        requested_by=ctx.id,
+        steps=body.steps,
+        params=body.params,
+        priority=int(body.priority),
+    )
+    ok = jid is not None
+    write_action_log_safe(
+        user_id=ctx.id,
+        action_type="JOB_PIPELINE_ENQUEUE",
+        result="SUCCESS" if ok else "FAIL",
+        request=request,
+        data_source_id=body.data_source_id,
+        detail={
+            "job_id": str(jid) if jid else None,
+            "steps": list(body.steps),
+            "priority": body.priority,
+        },
+        error_message=None if ok else "Failed to enqueue pipeline job",
+    )
+    if not ok:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": "Failed to enqueue pipeline job (DB error or scan_jobs not ready)",
+            },
+        )
+    payload = AdminPipelineJobResponse(pipeline_job_id=jid)
     return JSONResponse(status_code=200, content=payload.model_dump(mode="json"))
 
 
@@ -527,6 +579,25 @@ def admin_retry_job(
         message=str(res.get("message") or "Job retry queued successfully"),
     )
     return JSONResponse(status_code=200, content=payload.model_dump(mode="json"))
+
+
+@router.get("/jobs/{job_id}/children", response_model=None)
+def admin_list_job_children(
+    job_id: UUID,
+    _: CurrentUserContext = Depends(require_admin_user),
+) -> JSONResponse:
+    """List direct child ``scan_jobs`` rows for a parent job id."""
+    res, err = admin_jobs_service.list_admin_job_children(parent_job_id=job_id)
+    if err == "not_found":
+        return JSONResponse(status_code=404, content={"status": "error", "message": "Job not found"})
+    if err == "scan_jobs_missing":
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "message": "scan_jobs table is not available"},
+        )
+    if err == "db_error" or res is None:
+        return JSONResponse(status_code=500, content={"status": "error", "message": "Failed to list child jobs"})
+    return JSONResponse(status_code=200, content=res.model_dump(mode="json"))
 
 
 @router.get("/jobs/{job_id}", response_model=None)

@@ -8,6 +8,7 @@ const JOB_TYPE_LABELS: Record<string, string> = {
   PROCESS_PENDING_DOCUMENTS: "문서 처리",
   CHUNK_COMPLETED_TEXT: "Chunk 생성",
   EMBED_PENDING_CHUNKS: "Embedding 생성",
+  PIPELINE: "파이프라인",
 };
 
 /** Korean label for dashboard / jobs table; unknown codes pass through. */

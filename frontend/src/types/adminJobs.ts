@@ -73,6 +73,8 @@ export type AdminJobsListParams = {
   data_source_id?: string;
   status?: string;
   job_type?: string;
+  /** Filter rows where ``parent_job_id`` equals this UUID */
+  parent_job_id?: string;
   keyword?: string;
   from_date?: string;
   to_date?: string;
@@ -213,4 +215,37 @@ export type AdminJobRetryResponse = {
   retry_count: number;
   max_retries: number;
   message: string;
+};
+
+/** POST /api/admin/pipeline-jobs */
+export type AdminPipelineJobRequest = {
+  data_source_id: string;
+  priority?: number;
+  steps?: string[] | null;
+  params?: Record<string, unknown> | null;
+};
+
+export type AdminPipelineJobResponse = {
+  status: string;
+  pipeline_job_id: string;
+  job_type: string;
+  message: string;
+};
+
+/** GET /api/admin/jobs/{job_id}/children */
+export type AdminJobChildItem = {
+  id: string;
+  job_type: string;
+  pipeline_step: string | null;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  progress_percent: number | null;
+};
+
+export type AdminJobChildrenResponse = {
+  status: string;
+  parent_job_id: string;
+  items: AdminJobChildItem[];
+  total: number;
 };

@@ -7,8 +7,11 @@ import type {
   AdminJobDetailResponse,
   AdminJobFailuresResponse,
   AdminJobListResponse,
+  AdminJobChildrenResponse,
   AdminJobFailuresParams,
   AdminJobsListParams,
+  AdminPipelineJobRequest,
+  AdminPipelineJobResponse,
   AdminProcessPendingTextJobRequest,
   AdminProcessPendingTextJobResponse,
   AdminProcessPendingDocumentsJobRequest,
@@ -30,6 +33,12 @@ export async function getAdminJobs(params: AdminJobsListParams): Promise<AdminJo
 
 export async function getAdminJob(jobId: string): Promise<AdminJobDetailResponse> {
   const { data } = await httpClient.get<AdminJobDetailResponse>(`/api/admin/jobs/${jobId}`);
+  return data;
+}
+
+/** Child jobs for a parent ``scan_jobs`` row (e.g. PIPELINE parent). */
+export async function getAdminJobChildren(jobId: string): Promise<AdminJobChildrenResponse> {
+  const { data } = await httpClient.get<AdminJobChildrenResponse>(`/api/admin/jobs/${jobId}/children`);
   return data;
 }
 
@@ -98,7 +107,12 @@ export async function postAdminEmbedPendingChunksJob(
   return data;
 }
 
-/** Request cancel on a PENDING (immediate) or RUNNING (→ CANCELLING) job. */
+/** Queue a server-driven PIPELINE parent job (worker enqueues children sequentially). */
+export async function postAdminPipelineJob(body: AdminPipelineJobRequest): Promise<AdminPipelineJobResponse> {
+  const { data } = await httpClient.post<AdminPipelineJobResponse>("/api/admin/pipeline-jobs", body);
+  return data;
+}
+
 export async function cancelAdminJob(
   jobId: string,
   body?: AdminJobCancelRequest

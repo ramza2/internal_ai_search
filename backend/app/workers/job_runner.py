@@ -34,6 +34,7 @@ _TEST_JOB_TYPES = frozenset(
         "PROCESS_PENDING_DOCUMENTS",
         "CHUNK_COMPLETED_TEXT",
         "EMBED_PENDING_CHUNKS",
+        "PIPELINE",
     }
 )
 
@@ -94,6 +95,18 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
             failed_files=0,
             skipped_files=0,
         )
+
+    if job.job_type == scan_jobs_service.JOB_TYPE_PIPELINE:
+        if job.data_source_id is None:
+            return WorkerRunResult(
+                success=False,
+                message="PIPELINE job is missing data_source_id",
+                finalized_by_handler=False,
+            )
+        from app.services.pipeline_jobs_service import handle_pipeline_parent_dequeued
+
+        wid = (settings.worker_id or "local-worker-1").strip()[:100]
+        return handle_pipeline_parent_dequeued(job, heartbeat_worker_id=wid)
 
     if job.job_type == "WEBDAV_SYNC_TREE":
         if job.data_source_id is None:

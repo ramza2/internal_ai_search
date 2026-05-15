@@ -16,6 +16,7 @@ import {
 } from "@/components/ui";
 import type { DataSource } from "@/types/dataSource";
 import type { DocumentProcessResponse } from "@/types/documentProcessing";
+import type { AdminPipelineJobRequest } from "@/types/adminJobs";
 import type { FileStatsResponse } from "@/types/file";
 import type {
   PipelineAutoStepKey,
@@ -98,6 +99,9 @@ const AUTO_CONFIRM_MSG =
 
 const BG_AUTO_CONFIRM_MSG =
   "백그라운드 파이프라인을 순차 등록합니다. 각 단계가 완료되면 다음 단계 Job을 생성합니다. 브라우저를 닫으면 현재 실행 중인 Job은 계속 처리되지만 다음 단계 자동 등록은 중단될 수 있습니다. 계속하시겠습니까?";
+
+const SERVER_PIPELINE_CONFIRM_MSG =
+  "서버가 PIPELINE 부모 Job을 생성하고, DB worker가 단계별 하위 Job을 순차 등록합니다. 브라우저를 닫아도 전체 파이프라인이 이어집니다. 계속하시겠습니까?";
 
 function canShowJobCancelButton(status: string | undefined): boolean {
   const u = (status || "").toUpperCase();
@@ -288,6 +292,10 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
   const [bgAutoPoll, setBgAutoPoll] = useState(false);
   const [bgSequentialRunning, setBgSequentialRunning] = useState(false);
   const [confirmBgAutoOpen, setConfirmBgAutoOpen] = useState(false);
+  const [confirmServerPipelineOpen, setConfirmServerPipelineOpen] = useState(false);
+  const [serverPipelineBusy, setServerPipelineBusy] = useState(false);
+  const [serverPipelineErr, setServerPipelineErr] = useState("");
+  const [serverPipelineJobId, setServerPipelineJobId] = useState<string | null>(null);
   const [bgCancelDialogStep, setBgCancelDialogStep] = useState<StepId | null>(null);
   const [bgCancelBusy, setBgCancelBusy] = useState(false);
   const [bgEnqueueStep, setBgEnqueueStep] = useState<StepId | null>(null);
@@ -525,9 +533,82 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
     onClose();
   }, [onClose]);
 
-  const disableManualActions = autoRunning || loading !== null || bgSequentialRunning || bgEnqueueStep !== null;
-  const formDisabled = autoRunning || bgSequentialRunning;
-  const closeDisabled = autoRunning || bgSequentialRunning || loading !== null;
+  const disableManualActions =
+    autoRunning || loading !== null || bgSequentialRunning || bgEnqueueStep !== null || serverPipelineBusy;
+  async function executeServerPipelineJob() {
+    setServerPipelineErr("");
+    setServerPipelineJobId(null);
+    setServerPipelineBusy(true);
+    try {
+      const p = docParamsRef.current;
+      const docExt = p?.include_extensions?.trim();
+      if (!p || !docExt) {
+        throw new Error("문서 처리: 확장자를 하나 이상 선택해 주세요.");
+      }
+      const cs = Math.min(10_000, Math.max(200, Number(chunkSize) || 1200));
+      const co = Math.min(9999, Math.max(0, Number(chunkOverlap) || 0));
+      if (co >= cs) {
+        throw new Error("chunk_overlap은 chunk_size보다 작아야 합니다.");
+      }
+      const textBytes = Math.max(1, Number(textMaxMb) || 5) * 1024 * 1024;
+      const body: AdminPipelineJobRequest = {
+        data_source_id: dataSource.id,
+        priority: 0,
+        steps: [
+          "WEBDAV_SYNC_TREE",
+          "PROCESS_PENDING_TEXT",
+          "PROCESS_PENDING_DOCUMENTS",
+          "CHUNK_COMPLETED_TEXT",
+          "EMBED_PENDING_CHUNKS",
+        ],
+        params: {
+          sync_tree: {
+            start_path: startPath || "/",
+            max_depth: maxDepth,
+            max_items: maxItems,
+            include_hidden: includeHidden,
+            apply_exclusions: applyExclusions,
+            detect_deleted: detectDeleted,
+          },
+          process_text: {
+            limit: textLimit,
+            max_file_size_bytes: textBytes,
+            include_extensions: textIncludeExt.trim() || undefined,
+          },
+          process_documents: {
+            limit: p.limit,
+            max_file_size_bytes: p.max_file_size_bytes,
+            include_extensions: docExt,
+            reprocess_skipped: Boolean(p.reprocess_skipped),
+          },
+          chunk: {
+            limit: Math.min(5000, Math.max(1, chunkLimit)),
+            chunk_size: cs,
+            chunk_overlap: co,
+            min_chunk_size: Math.max(1, Math.min(10_000, Number(chunkMin) || 100)),
+            reprocess: chunkReprocess,
+            include_extensions: chunkIncludeExt.trim() || undefined,
+          },
+          embed: {
+            limit: Math.min(10_000, Math.max(1, embedLimit)),
+            batch_size: Math.min(128, Math.max(1, embedBatch)),
+            include_extensions: embedIncludeExt.trim() || undefined,
+            reembed: embedReembed,
+          },
+        },
+      };
+      const res = await adminJobsApi.postAdminPipelineJob(body);
+      setServerPipelineJobId(res.pipeline_job_id);
+      void onRefreshRef.current();
+    } catch (e) {
+      setServerPipelineErr(getApiErrorMessage(e));
+    } finally {
+      setServerPipelineBusy(false);
+    }
+  }
+
+  const formDisabled = autoRunning || bgSequentialRunning || serverPipelineBusy;
+  const closeDisabled = autoRunning || bgSequentialRunning || loading !== null || serverPipelineBusy;
 
   async function handleBgEnqueue(stepId: StepId) {
     setBgEnqueueStep(stepId);
@@ -1049,19 +1130,48 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
             )}
 
             {executionMode === "background" && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.75rem", alignItems: "center" }}>
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  disabled={disableManualActions}
-                  onClick={() => setConfirmBgAutoOpen(true)}
-                >
-                  권장 순서로 백그라운드 Job 생성
-                </Button>
-                <span className="muted" style={{ fontSize: "0.8rem", maxWidth: "28rem" }}>
-                  parent pipeline job 없이 최대 5개의 개별 Job을 브라우저가 순서대로 등록합니다. 브라우저를 닫으면 이후 단계 자동 등록이 중단될 수 있습니다.
-                </span>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem", marginTop: "0.75rem" }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    loading={serverPipelineBusy}
+                    disabled={disableManualActions}
+                    onClick={() => setConfirmServerPipelineOpen(true)}
+                  >
+                    서버 파이프라인 Job 생성 (권장)
+                  </Button>
+                  <span className="muted" style={{ fontSize: "0.8rem", maxWidth: "32rem" }}>
+                    PIPELINE 부모 Job 1건이 등록되고 worker가 하위 Job을 순차 생성·실행합니다. 브라우저를 닫아도 진행이 이어집니다.
+                  </span>
+                </div>
+                <ErrorMessage message={serverPipelineErr} />
+                {serverPipelineJobId ? (
+                  <div className="alert alertSuccess" style={{ fontSize: "0.85rem" }}>
+                    <strong>파이프라인 Job이 등록되었습니다.</strong>{" "}
+                    <span className="muted">job_id: {serverPipelineJobId}</span>
+                    <div style={{ marginTop: "0.35rem" }}>
+                      <Link to="/admin/jobs" className="btn btnSecondary btnSm">
+                        /admin/jobs 에서 진행 상황 보기
+                      </Link>
+                    </div>
+                  </div>
+                ) : null}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={disableManualActions}
+                    onClick={() => setConfirmBgAutoOpen(true)}
+                  >
+                    브라우저 순차 Job 등록 (레거시)
+                  </Button>
+                  <span className="muted" style={{ fontSize: "0.8rem", maxWidth: "32rem" }}>
+                    parent 없이 개별 Job을 브라우저가 순서대로 등록합니다. 브라우저를 닫으면 이후 단계 자동 등록이 중단될 수 있습니다.
+                  </span>
+                </div>
               </div>
             )}
 
@@ -1703,7 +1813,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
 
       <ConfirmDialog
         open={confirmBgAutoOpen}
-        title="백그라운드 파이프라인"
+        title="백그라운드 파이프라인 (브라우저 순차)"
         message={BG_AUTO_CONFIRM_MSG}
         confirmLabel="계속"
         cancelLabel="취소"
@@ -1711,6 +1821,19 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
         onConfirm={() => {
           setConfirmBgAutoOpen(false);
           void executeBackgroundAutoPipeline();
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmServerPipelineOpen}
+        title="서버 파이프라인"
+        message={SERVER_PIPELINE_CONFIRM_MSG}
+        confirmLabel="계속"
+        cancelLabel="취소"
+        onCancel={() => setConfirmServerPipelineOpen(false)}
+        onConfirm={() => {
+          setConfirmServerPipelineOpen(false);
+          void executeServerPipelineJob();
         }}
       />
 

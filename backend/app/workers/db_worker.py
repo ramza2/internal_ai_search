@@ -12,7 +12,7 @@ import logging
 import time
 
 from app.core.config import Settings
-from app.services import scan_jobs_service
+from app.services import pipeline_jobs_service, scan_jobs_service
 from app.workers import job_runner
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,13 @@ class DBPollingWorker:
                 logger.info("Marked %s stale RUNNING scan_jobs as FAILED", n_stale)
         except Exception:  # pragma: no cover
             logger.exception("mark_stale_running_jobs failed")
+
+        try:
+            n_adv = pipeline_jobs_service.advance_running_pipeline_jobs(worker_id=self.worker_id)
+            if n_adv:
+                logger.info("Advanced %s PIPELINE parent job(s)", n_adv)
+        except Exception:  # pragma: no cover
+            logger.exception("advance_running_pipeline_jobs failed")
 
         for _ in range(self.max_jobs_per_loop):
             if self._stop:
