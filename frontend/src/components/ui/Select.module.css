@@ -6,7 +6,7 @@
   font-size: 0.9rem;
   font-family: inherit;
   color: var(--color-text);
-  background: var(--color-surface);
+  background: var(--color-input-bg);
   cursor: pointer;
 }
 

@@ -3,10 +3,11 @@
   --color-primary: #2563eb;
   --color-primary-dark: #1d4ed8;
   --color-primary-soft: #dbeafe;
-  --color-bg: #f4f6fb;
-  --color-bg-subtle: #f4f6fb;
+  --color-bg: #f9fafb;
+  --color-bg-subtle: #f3f4f6;
   --color-surface: #ffffff;
-  --color-border: #e2e8f0;
+  --color-input-bg: #f3f3f5;
+  --color-border: #e5e7eb;
   --color-text: #1e293b;
   --color-text-muted: #64748b;
   --color-muted: #64748b;
@@ -21,8 +22,8 @@
   --color-header-bg: #ffffff;
   --radius-sm: 6px;
   --radius-md: 8px;
-  --radius-lg: 12px;
-  --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.08);
+  --radius-lg: 10px;
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.06);
   --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.06);
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
   --layout-max: 1240px;
@@ -78,7 +79,7 @@ h3 {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
   border: 1px solid var(--color-border);
-  padding: 1.25rem 1.5rem;
+  padding: 1.5rem;
   margin-bottom: 1rem;
 }
 
@@ -99,11 +100,13 @@ h3 {
 .formGrid input,
 .formGrid select,
 .formGrid textarea {
-  padding: 0.5rem 0.65rem;
+  padding: 0.55rem 0.75rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   font-size: 0.95rem;
   font-family: inherit;
+  background: var(--color-input-bg);
+  color: var(--color-text);
 }
 
 /* 레거시 호환: 점진적으로 ui/Button 등으로 대체 */
@@ -143,6 +146,16 @@ h3 {
 
 .btnSecondary:hover:not(:disabled) {
   background: var(--color-bg-subtle);
+}
+
+.btnOutline {
+  background: transparent;
+  border: 1px solid var(--color-primary);
+  color: var(--color-primary);
+}
+
+.btnOutline:hover:not(:disabled) {
+  background: var(--color-primary-soft);
 }
 
 .btnDanger {

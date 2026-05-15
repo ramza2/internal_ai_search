@@ -44,6 +44,16 @@
   background: var(--color-bg-subtle);
 }
 
+.outline {
+  background: transparent;
+  border: 1px solid var(--color-primary);
+  color: var(--color-primary);
+}
+
+.outline:hover:not(:disabled) {
+  background: var(--color-primary-soft);
+}
+
 .danger {
   background: var(--color-danger);
   color: #fff;

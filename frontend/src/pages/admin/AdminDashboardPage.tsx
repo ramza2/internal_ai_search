@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { ErrorMessage } from "@/components/ErrorMessage";
 import { Loading } from "@/components/Loading";
 import {
+  AdvancedSection,
   Badge,
   Button,
   Card,
@@ -99,68 +100,35 @@ export function AdminDashboardPage() {
 
       {s && (
         <div className={styles.sectionStack}>
-          <SectionCard title="사용자">
+          <SectionCard title="시스템 요약">
             <div className={styles.statGrid}>
               <StatCard label="전체 사용자" value={formatInt(s.users.total)} />
               <StatCard label="승인 대기 사용자" value={formatInt(s.users.pending)} />
-              <StatCard label="활성" value={formatInt(s.users.active)} />
-              <StatCard label="비활성" value={formatInt(s.users.inactive)} />
-              <StatCard label="잠금" value={formatInt(s.users.locked)} />
-              <StatCard label="관리자 수" value={formatInt(s.users.admins)} />
-            </div>
-          </SectionCard>
-
-          <SectionCard title="저장소">
-            <div className={styles.statGrid}>
               <StatCard label="등록된 저장소" value={formatInt(s.data_sources.total)} />
-              <StatCard label="사용 중" value={formatInt(s.data_sources.active)} />
-              <StatCard label="사용 중지" value={formatInt(s.data_sources.inactive)} />
-              <StatCard label="접속 확인 성공" value={formatInt(s.data_sources.connection_success)} />
-              <StatCard label="접속 확인 실패" value={formatInt(s.data_sources.connection_failed)} />
-              <StatCard label="미확인" value={formatInt(s.data_sources.never_tested)} />
-            </div>
-          </SectionCard>
-
-          <SectionCard title="파일 수집·내용 추출 현황">
-            <div className={styles.statGrid}>
-              <StatCard label="전체 항목" value={formatInt(s.files.total_items)} />
-              <StatCard label="파일" value={formatInt(s.files.total_files)} />
-              <StatCard label="폴더" value={formatInt(s.files.total_directories)} />
-              <StatCard label="총 용량" value={s.files.total_size_human} />
-              <StatCard label="처리 완료" value={formatInt(s.files.completed)} />
-              <StatCard label="처리 대기" value={formatInt(s.files.pending)} />
-              <StatCard label="처리 실패" value={formatInt(s.files.failed)} />
-              <StatCard label="건너뜀" value={formatInt(s.files.skipped)} />
-            </div>
-          </SectionCard>
-
-          <SectionCard title="검색 반영 현황">
-            <div className={styles.statGrid}>
-              <StatCard label="검색 단위(전체)" value={formatInt(s.chunks.total_chunks)} />
-              <StatCard label="검색 인덱스 완료" value={formatInt(s.chunks.embedded_chunks)} />
+              <StatCard label="전체 파일 수" value={formatInt(s.files.total_files)} />
+              <StatCard label="내용 추출 완료" value={formatInt(s.files.completed)} />
               <StatCard label="검색 인덱스 생성 대기" value={formatInt(s.chunks.pending_embedding_chunks)} />
+              <StatCard label="진행 중인 전체 작업" value={formatInt(data?.pipelines?.running ?? 0)} />
             </div>
-          </SectionCard>
-
-          <SectionCard title="최근 24시간 활동">
-            <div className={styles.statGrid}>
-              <StatCard label="검색" value={formatInt(s.activity.search_count_24h)} />
-              <StatCard label="AI 질문" value={formatInt(s.activity.rag_count_24h)} />
-              <StatCard label="로그인" value={formatInt(s.activity.login_count_24h)} />
-              <StatCard label="실패한 활동" value={formatInt(s.activity.failed_action_count_24h)} />
-            </div>
+            <p className="muted" style={{ marginTop: "0.75rem", marginBottom: 0, fontSize: "0.82rem" }}>
+              최근 24시간 — 검색 {formatInt(s.activity.search_count_24h)} · AI 질문 {formatInt(s.activity.rag_count_24h)} ·
+              로그인 {formatInt(s.activity.login_count_24h)}
+              {s.activity.failed_action_count_24h > 0 ? (
+                <>
+                  {" "}
+                  · <span style={{ color: "var(--color-danger)" }}>실패 {formatInt(s.activity.failed_action_count_24h)}</span>
+                </>
+              ) : null}
+            </p>
           </SectionCard>
 
           <SectionCard title="전체 검색 반영 작업">
-            <div className={styles.statGrid}>
-              <StatCard label="진행 중" value={formatInt(data?.pipelines?.running ?? 0)} />
-              <StatCard label="대기 중" value={formatInt(data?.pipelines?.pending ?? 0)} />
-              <StatCard label="24시간 내 실패" value={formatInt(data?.pipelines?.failed_24h ?? 0)} />
-              <StatCard label="24시간 내 완료" value={formatInt(data?.pipelines?.completed_24h ?? 0)} />
-            </div>
-            <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.82rem" }}>
-              단계별 진행률·상세는 <Link to="/admin/jobs">작업 목록</Link>에서 확인할 수 있습니다.
+            <p className="muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.82rem" }}>
+              대기 {formatInt(data?.pipelines?.pending ?? 0)} · 24시간 완료 {formatInt(data?.pipelines?.completed_24h ?? 0)} ·
+              24시간 실패 {formatInt(data?.pipelines?.failed_24h ?? 0)} ·{" "}
+              <Link to="/admin/jobs">작업 목록</Link>
             </p>
+
             {!data?.recent_pipeline_jobs?.length ? (
               <p className="muted" style={{ marginTop: "0.65rem", fontSize: "0.85rem" }}>
                 최근 전체 검색 반영 작업이 없습니다.
@@ -270,9 +238,6 @@ export function AdminDashboardPage() {
                       <td>{j.data_source_name ?? "—"}</td>
                       <td>
                         <div>{getJobTypeLabel(j.job_type)}</div>
-                        <div className="muted" style={{ fontSize: "0.7rem" }} title={j.job_type}>
-                          {j.job_type}
-                        </div>
                       </td>
                       <td>
                         <Badge variant={getJobStatusBadgeVariant(j.status)}>{getJobStatusLabel(j.status)}</Badge>
@@ -289,6 +254,43 @@ export function AdminDashboardPage() {
               </DataTable>
             )}
           </SectionCard>
+
+
+          <AdvancedSection title="상세 지표 보기" summary="사용자·저장소·파일·검색 단위 상세">
+            <SectionCard title="사용자 상세">
+              <div className={styles.statGrid}>
+                <StatCard label="활성" value={formatInt(s.users.active)} />
+                <StatCard label="비활성" value={formatInt(s.users.inactive)} />
+                <StatCard label="잠금" value={formatInt(s.users.locked)} />
+                <StatCard label="관리자 수" value={formatInt(s.users.admins)} />
+              </div>
+            </SectionCard>
+            <SectionCard title="저장소 상세">
+              <div className={styles.statGrid}>
+                <StatCard label="사용 중" value={formatInt(s.data_sources.active)} />
+                <StatCard label="사용 중지" value={formatInt(s.data_sources.inactive)} />
+                <StatCard label="접속 확인 성공" value={formatInt(s.data_sources.connection_success)} />
+                <StatCard label="접속 확인 실패" value={formatInt(s.data_sources.connection_failed)} />
+                <StatCard label="미확인" value={formatInt(s.data_sources.never_tested)} />
+              </div>
+            </SectionCard>
+            <SectionCard title="파일 수집·내용 추출">
+              <div className={styles.statGrid}>
+                <StatCard label="전체 항목" value={formatInt(s.files.total_items)} />
+                <StatCard label="폴더" value={formatInt(s.files.total_directories)} />
+                <StatCard label="총 용량" value={s.files.total_size_human} />
+                <StatCard label="처리 대기" value={formatInt(s.files.pending)} />
+                <StatCard label="처리 실패" value={formatInt(s.files.failed)} />
+                <StatCard label="건너뜀" value={formatInt(s.files.skipped)} />
+              </div>
+            </SectionCard>
+            <SectionCard title="검색 반영">
+              <div className={styles.statGrid}>
+                <StatCard label="검색 단위(전체)" value={formatInt(s.chunks.total_chunks)} />
+                <StatCard label="검색 인덱스 완료" value={formatInt(s.chunks.embedded_chunks)} />
+              </div>
+            </SectionCard>
+          </AdvancedSection>
 
           <SectionCard title="최근 활동">
             {!data?.recent_actions?.length ? (

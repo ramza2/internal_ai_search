@@ -2,17 +2,16 @@
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: 1rem 1.1rem;
+  padding: 1.15rem 1.25rem;
   box-shadow: var(--shadow-card);
 }
 
 .label {
-  margin: 0 0 0.35rem;
-  font-size: 0.8rem;
-  font-weight: 600;
+  margin: 0 0 0.4rem;
+  font-size: 0.875rem;
+  font-weight: 500;
   color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  line-height: 1.35;
 }
 
 .value {

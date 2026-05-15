@@ -1,0 +1,33 @@
+.formBlock {
+  margin-top: 1rem;
+}
+
+.actions {
+  margin-top: 0.75rem;
+}
+
+.feedback {
+  margin-top: 0.75rem;
+}
+
+.feedbackMsg {
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  white-space: pre-wrap;
+}
+
+.checkRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.check {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  font-size: 0.875rem;
+  cursor: pointer;
+  margin-top: 0.35rem;
+}
