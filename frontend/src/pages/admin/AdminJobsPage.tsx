@@ -91,6 +91,12 @@ function jobParamsPreview(params: unknown): string {
   }
 }
 
+function jobParamsRetriedFromId(params: unknown): string {
+  if (!params || typeof params !== "object" || Array.isArray(params)) return "—";
+  const v = (params as Record<string, unknown>).retried_from_job_id;
+  return v != null && String(v).trim() !== "" ? String(v) : "—";
+}
+
 function dashStr(v: string | null | undefined): string {
   if (v == null || v === "") return "—";
   return v;
@@ -112,6 +118,21 @@ function canShowJobCancelButton(status: string | undefined): boolean {
   const u = (status || "").toUpperCase();
   return u === "PENDING" || u === "RUNNING" || u === "CANCELLING";
 }
+
+function canRetryJobStatus(status: string | undefined): boolean {
+  const u = (status || "").toUpperCase();
+  return u === "FAILED" || u === "CANCELLED" || u === "PARTIAL";
+}
+
+function isRetryLimitReached(j: AdminJob): boolean {
+  const rc = j.retry_count ?? 0;
+  const mx = j.max_retries ?? 1;
+  return rc >= mx;
+}
+
+const RETRY_CONFIRM_MSG =
+  "이 작업과 동일한 파라미터로 새 백그라운드 Job을 생성합니다. 계속하시겠습니까?";
+const RETRY_FORCE_CONFIRM_MSG = "재시도 한도를 초과했습니다. 강제로 새 Job을 생성하시겠습니까?";
 
 export function AdminJobsPage() {
   const { items: dataSources } = useDataSources(true);
@@ -196,6 +217,11 @@ export function AdminJobsPage() {
   const [cancelConfirmJob, setCancelConfirmJob] = useState<AdminJob | null>(null);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelFeedback, setCancelFeedback] = useState<string | null>(null);
+
+  const [retryDialog, setRetryDialog] = useState<null | { job: AdminJob; force: boolean }>(null);
+  const [retryBusy, setRetryBusy] = useState(false);
+  const [retryFeedback, setRetryFeedback] = useState<string | null>(null);
+  const [retryNewJobId, setRetryNewJobId] = useState<string | null>(null);
 
   const fetchList = useCallback(async () => {
     setListBusy(true);
@@ -475,6 +501,7 @@ export function AdminJobsPage() {
   }
 
   async function openDetail(jobId: string) {
+    setRetryNewJobId(null);
     setModalJobId(jobId);
     setDetail(null);
     setDetailErr("");
@@ -506,6 +533,7 @@ export function AdminJobsPage() {
     setDetailErr("");
     setFailures(null);
     setFailuresErr("");
+    setRetryNewJobId(null);
   }
 
   async function reloadDetailFor(jobId: string) {
@@ -550,6 +578,28 @@ export function AdminJobsPage() {
     }
   }
 
+  async function confirmRetry() {
+    if (!retryDialog || retryBusy) return;
+    const jid = retryDialog.job.id;
+    const force = retryDialog.force;
+    setRetryBusy(true);
+    setRetryFeedback(null);
+    setRetryNewJobId(null);
+    try {
+      const res = await adminJobsApi.retryAdminJob(jid, { force, priority: null });
+      setRetryDialog(null);
+      setRetryFeedback(`${res.message} · 새 job_id: ${res.new_job_id}`);
+      setRetryNewJobId(res.new_job_id);
+      await fetchList();
+      if (modalJobId === jid) await reloadDetailFor(jid);
+    } catch (e) {
+      setRetryFeedback(getApiErrorMessage(e));
+      setRetryDialog(null);
+    } finally {
+      setRetryBusy(false);
+    }
+  }
+
   if (loading && items.length === 0) return <Loading />;
 
   return (
@@ -562,6 +612,11 @@ export function AdminJobsPage() {
       {cancelFeedback != null && cancelFeedback !== "" && (
         <p className="muted" style={{ marginTop: "0.25rem", fontSize: "0.9rem" }}>
           {cancelFeedback}
+        </p>
+      )}
+      {retryFeedback != null && retryFeedback !== "" && (
+        <p className="muted" style={{ marginTop: "0.25rem", fontSize: "0.9rem" }}>
+          {retryFeedback}
         </p>
       )}
 
@@ -1378,7 +1433,7 @@ export function AdminJobsPage() {
                             type="button"
                             variant="secondary"
                             size="sm"
-                            disabled={listBusy || cancelBusy || j.status?.toUpperCase() === "CANCELLING"}
+                            disabled={listBusy || cancelBusy || retryBusy || j.status?.toUpperCase() === "CANCELLING"}
                             onClick={() => setCancelConfirmJob(j)}
                           >
                             {j.status?.toUpperCase() === "CANCELLING"
@@ -1387,6 +1442,36 @@ export function AdminJobsPage() {
                                 ? "취소"
                                 : "취소 요청"}
                           </Button>
+                        )}
+                        {canRetryJobStatus(j.status) && (
+                          <>
+                            {!isRetryLimitReached(j) ? (
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                disabled={listBusy || retryBusy}
+                                onClick={() => setRetryDialog({ job: j, force: false })}
+                              >
+                                재시도
+                              </Button>
+                            ) : (
+                              <>
+                                <span className="muted" style={{ fontSize: "0.68rem", lineHeight: 1.2 }}>
+                                  재시도 한도 도달
+                                </span>
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  disabled={listBusy || retryBusy}
+                                  onClick={() => setRetryDialog({ job: j, force: true })}
+                                >
+                                  강제 재시도
+                                </Button>
+                              </>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>
@@ -1417,7 +1502,7 @@ export function AdminJobsPage() {
                       variant="secondary"
                       size="sm"
                       style={{ marginRight: "0.5rem" }}
-                      disabled={detailBusy || cancelBusy || detail.job.status?.toUpperCase() === "CANCELLING"}
+                      disabled={detailBusy || cancelBusy || retryBusy || detail.job.status?.toUpperCase() === "CANCELLING"}
                       onClick={() => setCancelConfirmJob(detail.job)}
                     >
                       {detail.job.status?.toUpperCase() === "CANCELLING"
@@ -1426,6 +1511,38 @@ export function AdminJobsPage() {
                           ? "취소"
                           : "취소 요청"}
                     </Button>
+                  )}
+                  {detail && canRetryJobStatus(detail.job.status) && (
+                    <>
+                      {!isRetryLimitReached(detail.job) ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          style={{ marginRight: "0.5rem" }}
+                          disabled={detailBusy || retryBusy}
+                          onClick={() => setRetryDialog({ job: detail.job, force: false })}
+                        >
+                          재시도
+                        </Button>
+                      ) : (
+                        <>
+                          <span className="muted" style={{ marginRight: "0.35rem", fontSize: "0.75rem" }}>
+                            재시도 한도 도달
+                          </span>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            style={{ marginRight: "0.5rem" }}
+                            disabled={detailBusy || retryBusy}
+                            onClick={() => setRetryDialog({ job: detail.job, force: true })}
+                          >
+                            강제 재시도
+                          </Button>
+                        </>
+                      )}
+                    </>
                   )}
                   <Button type="button" variant="ghost" size="sm" onClick={closeDetail}>
                     닫기
@@ -1508,8 +1625,31 @@ export function AdminJobsPage() {
                     <dd className="snippet" style={{ margin: 0 }}>
                       {detail.job.parent_job_id ?? "—"}
                     </dd>
+                    <dt className="muted">retried_from_job_id</dt>
+                    <dd className="snippet" style={{ margin: 0 }}>{jobParamsRetriedFromId(detail.job.job_params)}</dd>
                   </dl>
 
+                  {retryNewJobId && (
+                    <div className="alert alertInfo" style={{ marginTop: "0.65rem", fontSize: "0.85rem" }}>
+                      새 Job이 <strong>PENDING</strong>으로 등록되었습니다. worker를 실행해야 처리됩니다.{" "}
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        style={{ marginLeft: "0.35rem" }}
+                        onClick={() => {
+                          const nid = retryNewJobId;
+                          setRetryNewJobId(null);
+                          void openDetail(nid);
+                        }}
+                      >
+                        새 Job 보기
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setRetryNewJobId(null)}>
+                        닫기
+                      </Button>
+                    </div>
+                  )}
                   {detail.job.job_params != null && (
                     <details style={{ marginTop: "0.75rem", fontSize: "0.85rem" }}>
                       <summary style={{ cursor: "pointer", marginBottom: "0.35rem" }}>job_params (JSON)</summary>
@@ -1583,6 +1723,18 @@ export function AdminJobsPage() {
           if (!cancelBusy) setCancelConfirmJob(null);
         }}
         onConfirm={() => void confirmCancelJob()}
+      />
+
+      <ConfirmDialog
+        open={retryDialog !== null}
+        title={retryDialog?.force === true ? "강제 재시도" : "작업 재시도"}
+        message={retryDialog?.force === true ? RETRY_FORCE_CONFIRM_MSG : RETRY_CONFIRM_MSG}
+        confirmLabel="계속"
+        cancelLabel="취소"
+        onCancel={() => {
+          if (!retryBusy) setRetryDialog(null);
+        }}
+        onConfirm={() => void confirmRetry()}
       />
     </div>
   );

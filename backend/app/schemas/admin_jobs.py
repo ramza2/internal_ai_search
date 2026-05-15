@@ -260,6 +260,23 @@ class AdminJobCancelResponse(BaseModel):
     message: str
 
 
+class AdminJobRetryRequest(BaseModel):
+    """Body for ``POST /api/admin/jobs/{job_id}/retry``."""
+
+    force: bool = False
+    priority: int | None = None
+
+
+class AdminJobRetryResponse(BaseModel):
+    status: str = "ok"
+    original_job_id: UUID
+    new_job_id: UUID
+    job_type: str
+    retry_count: int
+    max_retries: int
+    message: str = "Job retry queued successfully"
+
+
 __all__ = [
     "AdminJobDetailResponse",
     "AdminJobErrorResponse",
@@ -267,6 +284,8 @@ __all__ = [
     "AdminJobFailuresResponse",
     "AdminJobCancelRequest",
     "AdminJobCancelResponse",
+    "AdminJobRetryRequest",
+    "AdminJobRetryResponse",
     "AdminJobItem",
     "AdminJobListResponse",
     "AdminProcessPendingTextJobRequest",

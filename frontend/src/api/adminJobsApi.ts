@@ -2,6 +2,8 @@ import { httpClient } from "@/api/httpClient";
 import type {
   AdminJobCancelRequest,
   AdminJobCancelResponse,
+  AdminJobRetryRequest,
+  AdminJobRetryResponse,
   AdminJobDetailResponse,
   AdminJobFailuresResponse,
   AdminJobListResponse,
@@ -106,5 +108,17 @@ export async function cancelAdminJob(
       ? { reason: String(body.reason).trim() }
       : {};
   const { data } = await httpClient.post<AdminJobCancelResponse>(`/api/admin/jobs/${jobId}/cancel`, payload);
+  return data;
+}
+
+/** Clone a terminal job into a new PENDING worker job (manual retry). */
+export async function retryAdminJob(
+  jobId: string,
+  body?: AdminJobRetryRequest
+): Promise<AdminJobRetryResponse> {
+  const payload: Record<string, unknown> = {};
+  if (body?.force === true) payload.force = true;
+  if (body?.priority !== undefined && body?.priority !== null) payload.priority = body.priority;
+  const { data } = await httpClient.post<AdminJobRetryResponse>(`/api/admin/jobs/${jobId}/retry`, payload);
   return data;
 }

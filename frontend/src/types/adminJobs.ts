@@ -198,3 +198,19 @@ export type AdminJobCancelResponse = {
   status_after: string;
   message: string;
 };
+
+/** POST /api/admin/jobs/{job_id}/retry */
+export type AdminJobRetryRequest = {
+  force?: boolean;
+  priority?: number | null;
+};
+
+export type AdminJobRetryResponse = {
+  status: string;
+  original_job_id: string;
+  new_job_id: string;
+  job_type: string;
+  retry_count: number;
+  max_retries: number;
+  message: string;
+};

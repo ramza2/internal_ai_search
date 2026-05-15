@@ -18,6 +18,7 @@ LLM prompts in ``job_params``.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -52,6 +53,8 @@ _JOB_PARAMS_BLOCKED_KEYS = frozenset(
         "content",
         "file_bytes",
         "headers",
+        "embedding",
+        "vector",
     }
 )
 _MAX_JOB_PARAMS_DEPTH = 8
@@ -112,33 +115,7 @@ _JOB_INSERT_EXTRA_COLS = """
             max_retries,
             priority,"""
 
-
-def enqueue_scan_job(
-    *,
-    ds_id: UUID | None = None,
-    job_type: str,
-    requested_by: UUID | None = None,
-    job_params: dict[str, Any] | None = None,
-    parent_job_id: UUID | None = None,
-    pipeline_step: str | None = None,
-    priority: int = 0,
-    max_retries: int = 1,
-) -> UUID | None:
-    """Insert a ``PENDING`` row for a future DB-polling worker.
-
-    Not used by synchronous pipeline APIs yet. Returns ``None`` on any error.
-    Larger ``priority`` values are dequeued first (see README).
-    """
-    raw = (job_type or "").strip().upper() or JOB_TYPE_MANUAL_SCAN
-    if raw not in _KNOWN_JOB_TYPES:
-        raw = JOB_TYPE_MANUAL_SCAN
-    mr = max(0, min(int(max_retries), 1_000_000))
-    pr = int(priority)
-    step = (pipeline_step or "").strip()
-    if len(step) > 50:
-        step = step[:47] + "..."
-    clean_params = sanitize_job_params_for_storage(job_params)
-    stmt = f"""
+_INSERT_PENDING_SCAN_JOB_SQL = f"""
         INSERT INTO scan_jobs (
             id,
             data_source_id,
@@ -180,7 +157,7 @@ def enqueue_scan_job(
             NULL,
             %s,
             %s,
-            0,
+            %s,
             %s,
             %s,
             NOW(),
@@ -188,29 +165,203 @@ def enqueue_scan_job(
         )
         RETURNING id
     """
+
+
+def _insert_pending_scan_job_row(
+    cur: Any,
+    *,
+    ds_id: UUID | None,
+    job_type: str,
+    requested_by: UUID | None,
+    json_payload: Any,
+    parent_job_id: UUID | None,
+    pipeline_step: str | None,
+    retry_count: int,
+    max_retries: int,
+    priority: int,
+) -> UUID | None:
+    """Execute PENDING insert on an open cursor (caller owns transaction)."""
+    cur.execute(
+        _INSERT_PENDING_SCAN_JOB_SQL,
+        (
+            ds_id,
+            job_type,
+            requested_by,
+            json_payload,
+            parent_job_id,
+            pipeline_step,
+            int(retry_count),
+            int(max_retries),
+            int(priority),
+        ),
+    )
+    row = cur.fetchone()
+    return row["id"] if row else None
+
+
+def enqueue_scan_job(
+    *,
+    ds_id: UUID | None = None,
+    job_type: str,
+    requested_by: UUID | None = None,
+    job_params: dict[str, Any] | None = None,
+    parent_job_id: UUID | None = None,
+    pipeline_step: str | None = None,
+    priority: int = 0,
+    max_retries: int = 1,
+    retry_count: int = 0,
+) -> UUID | None:
+    """Insert a ``PENDING`` row for a future DB-polling worker.
+
+    Not used by synchronous pipeline APIs yet. Returns ``None`` on any error.
+    Larger ``priority`` values are dequeued first (see README).
+    """
+    raw = (job_type or "").strip().upper() or JOB_TYPE_MANUAL_SCAN
+    if raw not in _KNOWN_JOB_TYPES:
+        raw = JOB_TYPE_MANUAL_SCAN
+    mr = max(0, min(int(max_retries), 1_000_000))
+    pr = int(priority)
+    rc = max(0, min(int(retry_count), 1_000_000))
+    step = (pipeline_step or "").strip()
+    if len(step) > 50:
+        step = step[:47] + "..."
+    clean_params = sanitize_job_params_for_storage(job_params)
     try:
         json_payload = Json(clean_params) if clean_params is not None else None
         with get_db_connection() as conn:
             conn.row_factory = dict_row
             with conn.cursor() as cur:
-                cur.execute(
-                    stmt,
-                    (
-                        ds_id,
-                        raw,
-                        requested_by,
-                        json_payload,
-                        parent_job_id,
-                        step or None,
-                        mr,
-                        pr,
-                    ),
+                jid = _insert_pending_scan_job_row(
+                    cur,
+                    ds_id=ds_id,
+                    job_type=raw,
+                    requested_by=requested_by,
+                    json_payload=json_payload,
+                    parent_job_id=parent_job_id,
+                    pipeline_step=step or None,
+                    retry_count=rc,
+                    max_retries=mr,
+                    priority=pr,
                 )
-                row = cur.fetchone()
             conn.commit()
-        return row["id"] if row else None
+        return jid
     except Exception:
         return None
+
+
+_RETRYABLE_JOB_STATUSES = frozenset({"FAILED", "CANCELLED", "PARTIAL"})
+
+
+def retry_scan_job(
+    *,
+    job_id: UUID,
+    requested_by: UUID,
+    force: bool = False,
+    priority: int | None = None,
+) -> dict[str, Any]:
+    """Queue a new **PENDING** job cloned from a terminal row (manual retry only).
+
+    Uses a single transaction with ``SELECT … FOR UPDATE`` on the source row.
+    Does **not** mutate the original job.
+    """
+    try:
+        with get_db_connection() as conn:
+            conn.row_factory = dict_row
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT
+                            id,
+                            status::text AS status,
+                            job_type::text AS job_type,
+                            data_source_id,
+                            job_params,
+                            parent_job_id,
+                            pipeline_step::text AS pipeline_step,
+                            COALESCE(retry_count, 0) AS retry_count,
+                            COALESCE(max_retries, 1) AS max_retries,
+                            COALESCE(priority, 0) AS priority
+                        FROM scan_jobs
+                        WHERE id = %s
+                        FOR UPDATE
+                        """,
+                        (job_id,),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return {"result": "not_found", "message": "Job not found"}
+
+                    st = str(row.get("status") or "").strip().upper()
+                    if st not in _RETRYABLE_JOB_STATUSES:
+                        return {
+                            "result": "not_retryable",
+                            "message": "Only FAILED, CANCELLED, or PARTIAL jobs can be retried",
+                        }
+
+                    old_rc = int(row.get("retry_count") or 0)
+                    old_max = int(row.get("max_retries") or 1)
+                    if not force and old_rc >= old_max:
+                        return {
+                            "result": "max_retries_exceeded",
+                            "message": "max retries exceeded",
+                        }
+
+                    new_rc = old_rc + 1
+                    jt = str(row.get("job_type") or "").strip().upper() or JOB_TYPE_MANUAL_SCAN
+
+                    raw_params = row.get("job_params")
+                    base: dict[str, Any] = {}
+                    if isinstance(raw_params, dict):
+                        base = dict(raw_params)
+                    merged = {
+                        **base,
+                        "retried_from_job_id": str(job_id),
+                        "retry_requested_by": str(requested_by),
+                        "retry_created_at": datetime.now(UTC).isoformat(),
+                    }
+                    clean_params = sanitize_job_params_for_storage(merged)
+                    json_payload = Json(clean_params) if clean_params is not None else None
+
+                    eff_pr = int(priority) if priority is not None else int(row.get("priority") or 0)
+                    eff_pr = max(-1_000_000, min(eff_pr, 1_000_000))
+
+                    ps = row.get("pipeline_step")
+                    step_out: str | None = None
+                    if ps is not None and str(ps).strip():
+                        step_out = str(ps).strip()
+                        if len(step_out) > 50:
+                            step_out = step_out[:47] + "..."
+
+                    new_id = _insert_pending_scan_job_row(
+                        cur,
+                        ds_id=row.get("data_source_id"),
+                        job_type=jt,
+                        requested_by=requested_by,
+                        json_payload=json_payload,
+                        parent_job_id=row.get("parent_job_id"),
+                        pipeline_step=step_out,
+                        retry_count=new_rc,
+                        max_retries=old_max,
+                        priority=eff_pr,
+                    )
+                    if new_id is None:
+                        return {"result": "enqueue_failed", "message": "Failed to insert retry job"}
+
+                    return {
+                        "result": "ok",
+                        "original_job_id": job_id,
+                        "new_job_id": new_id,
+                        "job_type": jt,
+                        "retry_count": new_rc,
+                        "max_retries": old_max,
+                        "message": "Job retry queued successfully",
+                        "data_source_id": row.get("data_source_id"),
+                    }
+    except psycopg.errors.UndefinedTable:
+        return {"result": "scan_jobs_missing", "message": "scan_jobs table is not available"}
+    except Exception as exc:
+        return {"result": "db_error", "message": str(exc)[:500] or "Database error"}
 
 
 def update_scan_job_progress(
@@ -844,6 +995,7 @@ __all__ = [
     "mark_job_failed",
     "mark_stale_running_jobs",
     "request_job_cancel",
+    "retry_scan_job",
     "sanitize_job_params_for_response",
     "sanitize_job_params_for_storage",
     "update_job_heartbeat",

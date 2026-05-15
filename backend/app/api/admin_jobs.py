@@ -15,6 +15,8 @@ from app.schemas.admin_jobs import (
     AdminEmbedPendingChunksJobRequest,
     AdminEmbedPendingChunksJobResponse,
     AdminJobCancelResponse,
+    AdminJobRetryRequest,
+    AdminJobRetryResponse,
     AdminProcessPendingDocumentsJobRequest,
     AdminProcessPendingDocumentsJobResponse,
     AdminProcessPendingTextJobRequest,
@@ -427,6 +429,103 @@ async def admin_cancel_job(
         )
 
     payload = AdminJobCancelResponse(job_id=job_id, status_after=str(after or ""), message=msg)
+    return JSONResponse(status_code=200, content=payload.model_dump(mode="json"))
+
+
+@router.post("/jobs/{job_id}/retry", response_model=None)
+def admin_retry_job(
+    job_id: UUID,
+    request: Request,
+    body: AdminJobRetryRequest,
+    ctx: CurrentUserContext = Depends(require_admin_user),
+) -> JSONResponse:
+    """Queue a new **PENDING** job cloned from a terminal job (manual retry)."""
+    res = scan_jobs_service.retry_scan_job(
+        job_id=job_id,
+        requested_by=ctx.id,
+        force=bool(body.force),
+        priority=body.priority,
+    )
+    outcome = str(res.get("result") or "")
+    msg = str(res.get("message") or "")
+    ds_for_log = res.get("data_source_id")
+
+    def _fail_log(reason_key: str) -> None:
+        write_action_log_safe(
+            user_id=ctx.id,
+            action_type="JOB_RETRY_REQUEST",
+            result="FAIL",
+            request=request,
+            data_source_id=ds_for_log if isinstance(ds_for_log, UUID) else None,
+            detail={
+                "original_job_id": str(job_id),
+                "force": bool(body.force),
+                "reason": reason_key,
+            },
+            error_message=msg or None,
+        )
+
+    if outcome == "not_found":
+        _fail_log("not_found")
+        return JSONResponse(status_code=404, content={"status": "error", "message": "Job not found"})
+    if outcome == "scan_jobs_missing":
+        _fail_log("scan_jobs_missing")
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "message": "scan_jobs table is not available"},
+        )
+    if outcome == "not_retryable":
+        _fail_log("not_retryable")
+        return JSONResponse(
+            status_code=409,
+            content={"status": "error", "message": msg or "Only FAILED, CANCELLED, or PARTIAL jobs can be retried"},
+        )
+    if outcome == "max_retries_exceeded":
+        _fail_log("max retries exceeded")
+        return JSONResponse(
+            status_code=409,
+            content={"status": "error", "message": msg or "max retries exceeded"},
+        )
+    if outcome in ("db_error", "enqueue_failed"):
+        _fail_log(outcome)
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": msg or "Failed to queue retry job"},
+        )
+
+    new_id = res.get("new_job_id")
+    if not isinstance(new_id, UUID):
+        _fail_log("enqueue_failed")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": "Failed to queue retry job"},
+        )
+
+    write_action_log_safe(
+        user_id=ctx.id,
+        action_type="JOB_RETRY_REQUEST",
+        result="SUCCESS",
+        request=request,
+        data_source_id=ds_for_log if isinstance(ds_for_log, UUID) else None,
+        detail={
+            "original_job_id": str(job_id),
+            "new_job_id": str(new_id),
+            "job_type": str(res.get("job_type") or ""),
+            "force": bool(body.force),
+            "retry_count": int(res.get("retry_count") or 0),
+            "max_retries": int(res.get("max_retries") or 1),
+        },
+        error_message=None,
+    )
+
+    payload = AdminJobRetryResponse(
+        original_job_id=job_id,
+        new_job_id=new_id,
+        job_type=str(res.get("job_type") or ""),
+        retry_count=int(res.get("retry_count") or 0),
+        max_retries=int(res.get("max_retries") or 1),
+        message=str(res.get("message") or "Job retry queued successfully"),
+    )
     return JSONResponse(status_code=200, content=payload.model_dump(mode="json"))
 
 
