@@ -208,8 +208,8 @@ export function DataSourcesPage() {
   return (
     <div>
       <PageHeader
-        title="데이터 소스 설정"
-        description="WebDAV 기반 소스를 등록하고 접속을 검증합니다. App Password 등 비밀 값은 저장 후 다시 표시되지 않습니다."
+        title="저장소 설정"
+        description="WebDAV 저장소를 등록하고 접속을 확인합니다. 접속 비밀번호는 저장 후 다시 표시되지 않습니다."
         actions={
           <Button type="button" variant="secondary" size="sm" loading={listBusy} onClick={() => void load()} disabled={loading}>
             목록 새로고침
@@ -231,13 +231,13 @@ export function DataSourcesPage() {
         title="등록"
         actions={
           <Button type="button" variant="secondary" size="sm" onClick={() => setShowForm((s) => !s)}>
-            {showForm ? "폼 닫기" : "데이터 소스 추가"}
+            {showForm ? "닫기" : "저장소 추가"}
           </Button>
         }
       >
         {showForm && (
           <form onSubmit={onCreate} className="formGrid" style={{ maxWidth: 560, marginTop: "0.5rem" }}>
-            <FormField label="데이터 소스명">
+            <FormField label="저장소 이름">
               <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
             </FormField>
             <FormField label="유형">
@@ -256,16 +256,16 @@ export function DataSourcesPage() {
                 LOCAL_FOLDER는 추후 지원 예정입니다. WebDAV 계열 유형을 선택해 주세요.
               </p>
             )}
-            <FormField label="서버 URL">
+            <FormField label="저장소 주소">
               <Input value={form.server_url} onChange={(e) => setForm({ ...form, server_url: e.target.value })} required />
             </FormField>
-            <FormField label="WebDAV 루트 경로" hint="선택">
+            <FormField label="시작 폴더 경로" hint="선택">
               <Input value={form.webdav_root_path} onChange={(e) => setForm({ ...form, webdav_root_path: e.target.value })} />
             </FormField>
             <FormField label="사용자 ID" hint="선택">
               <Input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
             </FormField>
-            <FormField label="App Password / 비밀번호" hint="저장 후 서버에서 다시 내려주지 않습니다">
+            <FormField label="접속 비밀번호" hint="앱 비밀번호 등 · 저장 후 다시 표시되지 않습니다">
               <Input
                 type="password"
                 value={form.credential_secret}
@@ -282,9 +282,9 @@ export function DataSourcesPage() {
         )}
       </SectionCard>
 
-      <SectionCard title="데이터 소스 목록">
+      <SectionCard title="저장소 목록">
         <p className="muted" style={{ marginTop: 0 }}>
-          행의 <strong>수정</strong>에서 이름·서버 URL·WebDAV 경로·계정·설명·활성 여부를 바꿀 수 있습니다. 비밀번호는 비워 두면 기존 값이 유지됩니다.
+          <strong>설정 수정</strong>에서 이름·주소·시작 폴더·계정·설명·사용 여부를 바꿀 수 있습니다. 비밀번호는 비워 두면 기존 값이 유지됩니다.
         </p>
         {editingId && editForm && (
           <form
@@ -300,7 +300,7 @@ export function DataSourcesPage() {
             }}
           >
             <p style={{ gridColumn: "1 / -1", margin: 0, fontWeight: 600 }}>선택한 소스 수정</p>
-            <FormField label="데이터 소스명">
+            <FormField label="저장소 이름">
               <Input
                 value={editForm.name}
                 onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
@@ -323,14 +323,14 @@ export function DataSourcesPage() {
                 LOCAL_FOLDER는 추후 지원 예정입니다. WebDAV 계열 유형을 선택해 주세요.
               </p>
             )}
-            <FormField label="서버 URL">
+            <FormField label="저장소 주소">
               <Input
                 value={editForm.server_url}
                 onChange={(e) => setEditForm({ ...editForm, server_url: e.target.value })}
                 required
               />
             </FormField>
-            <FormField label="WebDAV 루트 경로" hint="WebDAV 유형 필수 · 끝 슬래시 없이 권장">
+            <FormField label="시작 폴더 경로" hint="WebDAV 유형 필수 · 끝 슬래시 없이 권장">
               <Input
                 value={editForm.webdav_root_path}
                 onChange={(e) => setEditForm({ ...editForm, webdav_root_path: e.target.value })}
@@ -342,7 +342,7 @@ export function DataSourcesPage() {
                 onChange={(e) => setEditForm({ ...editForm, username: e.target.value })}
               />
             </FormField>
-            <FormField label="App Password / 비밀번호" hint="비워 두면 기존 비밀번호 유지">
+            <FormField label="접속 비밀번호" hint="비워 두면 기존 비밀번호 유지">
               <Input
                 type="password"
                 value={editForm.credential_secret}
@@ -350,13 +350,13 @@ export function DataSourcesPage() {
                 autoComplete="new-password"
               />
             </FormField>
-            <FormField label="활성">
+            <FormField label="사용 여부">
               <Select
                 value={editForm.is_active ? "true" : "false"}
                 onChange={(e) => setEditForm({ ...editForm, is_active: e.target.value === "true" })}
               >
-                <option value="true">활성</option>
-                <option value="false">비활성</option>
+                <option value="true">사용</option>
+                <option value="false">사용 중지</option>
               </Select>
             </FormField>
             <FormField label="설명" hint="선택">
@@ -373,7 +373,7 @@ export function DataSourcesPage() {
                 loading={editSaving}
                 disabled={editSaving || editForm.source_type === "LOCAL_FOLDER"}
               >
-                저장
+                설정 저장
               </Button>
               <Button type="button" variant="secondary" disabled={editSaving} onClick={closeEdit}>
                 취소
@@ -389,7 +389,7 @@ export function DataSourcesPage() {
               <th>서버</th>
               <th>루트</th>
               <th>상태</th>
-              <th>마지막 테스트</th>
+              <th>접속 확인</th>
               <th style={{ minWidth: "14rem" }} />
             </tr>
           </thead>
@@ -402,7 +402,7 @@ export function DataSourcesPage() {
                 </td>
                 <td className="snippet">{ds.server_url}</td>
                 <td className="snippet">{ds.webdav_root_path ?? "—"}</td>
-                <td>{ds.is_active ? <Badge variant="success">활성</Badge> : <Badge variant="default">비활성</Badge>}</td>
+                <td>{ds.is_active ? <Badge variant="success">사용</Badge> : <Badge variant="default">중지</Badge>}</td>
                 <td>
                   {formatDateTime(ds.last_connection_test_at)}
                   <div style={{ marginTop: "0.25rem" }}>
@@ -429,10 +429,10 @@ export function DataSourcesPage() {
                     size="sm"
                     onClick={() => openEdit(ds)}
                   >
-                    수정
+                    설정 수정
                   </Button>
-                  <Button type="button" variant="secondary" size="sm" onClick={() => setPipelineSource(ds)}>
-                    파이프라인 실행
+                  <Button type="button" variant="primary" size="sm" onClick={() => setPipelineSource(ds)}>
+                    검색 반영 실행
                   </Button>
                   <Button
                     type="button"
@@ -442,15 +442,15 @@ export function DataSourcesPage() {
                     loading={testingId === ds.id}
                     disabled={testingId !== null && testingId !== ds.id}
                   >
-                    접속 테스트
+                    접속 확인
                   </Button>
                   {ds.is_active ? (
                     <Button type="button" variant="ghost" size="sm" onClick={() => toggleActive(ds, false)}>
-                      비활성
+                      사용 중지
                     </Button>
                   ) : (
                     <Button type="button" variant="primary" size="sm" onClick={() => toggleActive(ds, true)}>
-                      활성
+                      사용
                     </Button>
                   )}
                 </td>

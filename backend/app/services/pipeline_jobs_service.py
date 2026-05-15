@@ -41,6 +41,17 @@ _STEP_PARAM_KEYS: dict[str, str] = {
 
 _ACTIVE_CHILD = frozenset({"PENDING", "RUNNING", "CANCELLING"})
 _SUCCESS_CHILD = frozenset({"COMPLETED", "PARTIAL"})
+_BLOCKING_ENQUEUE_STATUSES = frozenset(_ACTIVE_CHILD | _SUCCESS_CHILD)
+
+
+def pipeline_advisory_int_keys(parent_id: UUID) -> tuple[int, int]:
+    """Two signed 32-bit keys for ``pg_try_advisory_lock`` / ``pg_advisory_unlock`` (session scope)."""
+    b = parent_id.bytes
+    k1 = int.from_bytes(b[0:4], "big", signed=False) & 0x7FFFFFFF
+    k2 = int.from_bytes(b[4:8], "big", signed=False) & 0x7FFFFFFF
+    if k1 == 0 and k2 == 0:
+        k2 = 1
+    return k1, k2
 
 
 def default_pipeline_params() -> dict[str, Any]:
@@ -261,6 +272,9 @@ def enqueue_pipeline_child_job(
 ) -> UUID | None:
     if parent_data_source_id is None:
         return None
+    existing = fetch_blocking_child_for_enqueue(parent_id=parent_id, step=step)
+    if existing and existing.get("id") is not None:
+        return UUID(str(existing["id"]))
     step_params = build_step_job_params(
         step,
         merged_params,
@@ -280,7 +294,8 @@ def enqueue_pipeline_child_job(
     )
 
 
-def fetch_latest_child_for_step(*, parent_id: UUID, step: str) -> dict[str, Any] | None:
+def fetch_canonical_child_for_step(*, parent_id: UUID, step: str) -> dict[str, Any] | None:
+    """Earliest-created child for ``(parent_id, step)`` — canonical row when duplicates exist."""
     try:
         with get_db_connection() as conn:
             conn.row_factory = dict_row
@@ -291,7 +306,7 @@ def fetch_latest_child_for_step(*, parent_id: UUID, step: str) -> dict[str, Any]
                     FROM scan_jobs
                     WHERE parent_job_id = %s
                       AND job_type::text = %s
-                    ORDER BY created_at DESC NULLS LAST
+                    ORDER BY created_at ASC NULLS LAST, id ASC
                     LIMIT 1
                     """,
                     (parent_id, step),
@@ -300,6 +315,66 @@ def fetch_latest_child_for_step(*, parent_id: UUID, step: str) -> dict[str, Any]
         return dict(row) if row else None
     except Exception:
         return None
+
+
+def fetch_blocking_child_for_enqueue(*, parent_id: UUID, step: str) -> dict[str, Any] | None:
+    """If a blocking-status child already exists for this step, return its row (do not enqueue another)."""
+    try:
+        with get_db_connection() as conn:
+            conn.row_factory = dict_row
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, status::text AS status, job_type::text AS job_type
+                    FROM scan_jobs
+                    WHERE parent_job_id = %s
+                      AND job_type::text = %s
+                      AND status::text = ANY(%s)
+                    ORDER BY created_at ASC NULLS LAST, id ASC
+                    LIMIT 1
+                    """,
+                    (parent_id, step, list(_BLOCKING_ENQUEUE_STATUSES)),
+                )
+                row = cur.fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+
+def count_blocking_children_for_step(*, parent_id: UUID, step: str) -> int:
+    try:
+        with get_db_connection() as conn:
+            conn.row_factory = dict_row
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)::int AS c
+                    FROM scan_jobs
+                    WHERE parent_job_id = %s
+                      AND job_type::text = %s
+                      AND status::text = ANY(%s)
+                    """,
+                    (parent_id, step, list(_BLOCKING_ENQUEUE_STATUSES)),
+                )
+                r = cur.fetchone() or {}
+                return int(r.get("c") or 0)
+    except Exception:
+        return 0
+
+
+def _warn_duplicate_blocking_children(*, parent_id: UUID, step: str) -> None:
+    n = count_blocking_children_for_step(parent_id=parent_id, step=step)
+    if n > 1:
+        logger.warning(
+            "Duplicate blocking pipeline children for parent=%s step=%s count=%s (using earliest created_at)",
+            parent_id,
+            step,
+            n,
+        )
+
+
+# Backwards-compatible name (earliest canonical child; formerly DESC "latest").
+fetch_latest_child_for_step = fetch_canonical_child_for_step
 
 
 def cancel_active_pipeline_children(parent_job_id: UUID) -> int:
@@ -358,7 +433,7 @@ def _parent_has_active_child(parent_id: UUID) -> bool:
 
 
 def _aggregate_terminal_parent_status(*, parent_id: UUID, steps: list[str]) -> tuple[str, str | None]:
-    """Return ``(COMPLETED|PARTIAL|FAILED|CANCELLED, message)`` from latest child per step."""
+    """Return ``(COMPLETED|PARTIAL|FAILED|CANCELLED, message)`` from canonical child per step."""
     statuses: list[str] = []
     for step in steps:
         ch = fetch_latest_child_for_step(parent_id=parent_id, step=step)
@@ -456,10 +531,7 @@ def handle_pipeline_parent_dequeued(job: WorkerJob, *, heartbeat_worker_id: str)
     )
 
 
-def advance_running_pipeline_jobs(*, worker_id: str) -> int:
-    """Drive RUNNING/CANCELLING PIPELINE parents: enqueue next child or finalize. Returns parents touched."""
-    wid = (worker_id or "").strip()[:100] or "local-worker-1"
-    touched = 0
+def _fetch_pipeline_parent_row(parent_id: UUID) -> dict[str, Any] | None:
     try:
         with get_db_connection() as conn:
             conn.row_factory = dict_row
@@ -476,6 +548,132 @@ def advance_running_pipeline_jobs(*, worker_id: str) -> int:
                         priority,
                         COALESCE(max_retries, 1) AS max_retries
                     FROM scan_jobs
+                    WHERE id = %s
+                      AND job_type::text = 'PIPELINE'
+                    """,
+                    (parent_id,),
+                )
+                row = cur.fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+
+def _advance_single_pipeline_parent(parent_id: UUID, wid: str) -> None:
+    """Advance one PIPELINE parent (caller must hold per-parent advisory lock)."""
+    prow = _fetch_pipeline_parent_row(parent_id)
+    if not prow:
+        return
+    pid = prow["id"]
+    pst = str(prow.get("status") or "").strip().upper()
+
+    if pst == "CANCELLING":
+        cancel_active_pipeline_children(pid)
+        if not _parent_has_active_child(pid):
+            scan_jobs_service.mark_job_cancelled(pid, message="Pipeline cancelled")
+        scan_jobs_service.update_job_heartbeat(pid, wid)
+        return
+
+    raw_params = prow.get("job_params")
+    if not isinstance(raw_params, dict):
+        scan_jobs_service.mark_job_failed(pid, error_message="PIPELINE job_params missing")
+        return
+
+    steps_list = raw_params.get("steps")
+    if not isinstance(steps_list, list) or not steps_list:
+        scan_jobs_service.mark_job_failed(pid, error_message="PIPELINE steps invalid")
+        return
+    steps = [str(s).strip().upper() for s in steps_list if str(s).strip()]
+    merged = _merged_params_from_parent_row(raw_params)
+    idx = int(raw_params.get("current_step_index") or 0)
+
+    if idx >= len(steps):
+        agg, msg = _aggregate_terminal_parent_status(parent_id=pid, steps=steps)
+        if agg == "COMPLETED":
+            scan_jobs_service.mark_job_completed(pid, message=msg)
+        elif agg == "PARTIAL":
+            scan_jobs_service.mark_job_partial(pid, message=msg)
+        elif agg == "FAILED":
+            scan_jobs_service.mark_job_failed(pid, error_message=msg or "Pipeline failed")
+        else:
+            scan_jobs_service.mark_job_cancelled(pid, message=msg or "Pipeline cancelled")
+        return
+
+    step = steps[idx]
+    _warn_duplicate_blocking_children(parent_id=pid, step=step)
+    child = fetch_canonical_child_for_step(parent_id=pid, step=step)
+    if child is None:
+        enqueue_pipeline_child_job(
+            parent_id=pid,
+            parent_data_source_id=prow.get("data_source_id"),
+            parent_requested_by=prow.get("requested_by"),
+            parent_priority=int(prow.get("priority") or 0),
+            parent_max_retries=int(prow.get("max_retries") or 1),
+            step=step,
+            step_index=idx,
+            merged_params=merged,
+        )
+        scan_jobs_service.update_job_heartbeat(pid, wid)
+        return
+
+    cst = str(child.get("status") or "").strip().upper()
+    if cst in _ACTIVE_CHILD:
+        scan_jobs_service.update_job_heartbeat(pid, wid)
+        return
+
+    if cst == "FAILED":
+        scan_jobs_service.mark_job_failed(pid, error_message="Pipeline step failed")
+        return
+    if cst == "CANCELLED":
+        scan_jobs_service.mark_job_cancelled(pid, message="Pipeline step cancelled")
+        return
+
+    if cst in _SUCCESS_CHILD:
+        next_idx = idx + 1
+        new_params = dict(raw_params)
+        new_params["current_step_index"] = next_idx
+        scan_jobs_service.update_scan_job_job_params(pid, new_params)
+        if next_idx >= len(steps):
+            agg, msg = _aggregate_terminal_parent_status(parent_id=pid, steps=steps)
+            if agg == "COMPLETED":
+                scan_jobs_service.mark_job_completed(pid, message=msg)
+            elif agg == "PARTIAL":
+                scan_jobs_service.mark_job_partial(pid, message=msg)
+            elif agg == "FAILED":
+                scan_jobs_service.mark_job_failed(pid, error_message=msg or "Pipeline failed")
+            else:
+                scan_jobs_service.mark_job_cancelled(pid, message=msg or "Pipeline cancelled")
+        else:
+            nxt = steps[next_idx]
+            _warn_duplicate_blocking_children(parent_id=pid, step=nxt)
+            enqueue_pipeline_child_job(
+                parent_id=pid,
+                parent_data_source_id=prow.get("data_source_id"),
+                parent_requested_by=prow.get("requested_by"),
+                parent_priority=int(prow.get("priority") or 0),
+                parent_max_retries=int(prow.get("max_retries") or 1),
+                step=nxt,
+                step_index=next_idx,
+                merged_params=merged,
+            )
+        scan_jobs_service.update_job_heartbeat(pid, wid)
+        return
+
+    scan_jobs_service.update_job_heartbeat(pid, wid)
+
+
+def advance_running_pipeline_jobs(*, worker_id: str) -> int:
+    """Drive RUNNING/CANCELLING PIPELINE parents: enqueue next child or finalize. Returns parents touched."""
+    wid = (worker_id or "").strip()[:100] or "local-worker-1"
+    touched = 0
+    try:
+        with get_db_connection() as conn:
+            conn.row_factory = dict_row
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM scan_jobs
                     WHERE job_type::text = 'PIPELINE'
                       AND status::text IN ('RUNNING', 'CANCELLING')
                     ORDER BY created_at ASC NULLS LAST
@@ -488,108 +686,25 @@ def advance_running_pipeline_jobs(*, worker_id: str) -> int:
 
     for prow in parents:
         pid = prow["id"]
-        pst = str(prow.get("status") or "").strip().upper()
         try:
-            if pst == "CANCELLING":
-                cancel_active_pipeline_children(pid)
-                if not _parent_has_active_child(pid):
-                    scan_jobs_service.mark_job_cancelled(pid, message="Pipeline cancelled")
-                scan_jobs_service.update_job_heartbeat(pid, wid)
-                touched += 1
-                continue
-
-            raw_params = prow.get("job_params")
-            if not isinstance(raw_params, dict):
-                scan_jobs_service.mark_job_failed(pid, error_message="PIPELINE job_params missing")
-                touched += 1
-                continue
-
-            steps_list = raw_params.get("steps")
-            if not isinstance(steps_list, list) or not steps_list:
-                scan_jobs_service.mark_job_failed(pid, error_message="PIPELINE steps invalid")
-                touched += 1
-                continue
-            steps = [str(s).strip().upper() for s in steps_list if str(s).strip()]
-            merged = _merged_params_from_parent_row(raw_params)
-            idx = int(raw_params.get("current_step_index") or 0)
-
-            if idx >= len(steps):
-                agg, msg = _aggregate_terminal_parent_status(parent_id=pid, steps=steps)
-                if agg == "COMPLETED":
-                    scan_jobs_service.mark_job_completed(pid, message=msg)
-                elif agg == "PARTIAL":
-                    scan_jobs_service.mark_job_partial(pid, message=msg)
-                elif agg == "FAILED":
-                    scan_jobs_service.mark_job_failed(pid, error_message=msg or "Pipeline failed")
-                else:
-                    scan_jobs_service.mark_job_cancelled(pid, message=msg or "Pipeline cancelled")
-                touched += 1
-                continue
-
-            step = steps[idx]
-            child = fetch_latest_child_for_step(parent_id=pid, step=step)
-            if child is None:
-                enqueue_pipeline_child_job(
-                    parent_id=pid,
-                    parent_data_source_id=prow.get("data_source_id"),
-                    parent_requested_by=prow.get("requested_by"),
-                    parent_priority=int(prow.get("priority") or 0),
-                    parent_max_retries=int(prow.get("max_retries") or 1),
-                    step=step,
-                    step_index=idx,
-                    merged_params=merged,
-                )
-                scan_jobs_service.update_job_heartbeat(pid, wid)
-                touched += 1
-                continue
-
-            cst = str(child.get("status") or "").strip().upper()
-            if cst in _ACTIVE_CHILD:
-                scan_jobs_service.update_job_heartbeat(pid, wid)
-                touched += 1
-                continue
-
-            if cst == "FAILED":
-                scan_jobs_service.mark_job_failed(pid, error_message="Pipeline step failed")
-                touched += 1
-                continue
-            if cst == "CANCELLED":
-                scan_jobs_service.mark_job_cancelled(pid, message="Pipeline step cancelled")
-                touched += 1
-                continue
-
-            if cst in _SUCCESS_CHILD:
-                next_idx = idx + 1
-                new_params = dict(raw_params)
-                new_params["current_step_index"] = next_idx
-                scan_jobs_service.update_scan_job_job_params(pid, new_params)
-                if next_idx >= len(steps):
-                    agg, msg = _aggregate_terminal_parent_status(parent_id=pid, steps=steps)
-                    if agg == "COMPLETED":
-                        scan_jobs_service.mark_job_completed(pid, message=msg)
-                    elif agg == "PARTIAL":
-                        scan_jobs_service.mark_job_partial(pid, message=msg)
-                    elif agg == "FAILED":
-                        scan_jobs_service.mark_job_failed(pid, error_message=msg or "Pipeline failed")
-                    else:
-                        scan_jobs_service.mark_job_cancelled(pid, message=msg or "Pipeline cancelled")
-                else:
-                    nxt = steps[next_idx]
-                    enqueue_pipeline_child_job(
-                        parent_id=pid,
-                        parent_data_source_id=prow.get("data_source_id"),
-                        parent_requested_by=prow.get("requested_by"),
-                        parent_priority=int(prow.get("priority") or 0),
-                        parent_max_retries=int(prow.get("max_retries") or 1),
-                        step=nxt,
-                        step_index=next_idx,
-                        merged_params=merged,
+            with get_db_connection() as lock_conn:
+                lock_conn.autocommit = True
+                k1, k2 = pipeline_advisory_int_keys(pid)
+                with lock_conn.cursor() as cur:
+                    cur.execute("SELECT pg_try_advisory_lock(%s::int, %s::int)", (k1, k2))
+                    got = cur.fetchone()
+                    locked = bool(got and got[0])
+                if not locked:
+                    logger.debug(
+                        "advance_running_pipeline_jobs: skip parent_id=%s (another worker holds lock)",
+                        pid,
                     )
-                scan_jobs_service.update_job_heartbeat(pid, wid)
-                touched += 1
-                continue
-
-            scan_jobs_service.update_job_heartbeat(pid, wid)
+                    continue
+                try:
+                    _advance_single_pipeline_parent(pid, wid)
+                finally:
+                    with lock_conn.cursor() as cur:
+                        cur.execute("SELECT pg_advisory_unlock(%s::int, %s::int)", (k1, k2))
             touched += 1
         except Exception:
             logger.exception("advance_running_pipeline_jobs failed parent_id=%s", pid)
@@ -604,11 +719,15 @@ __all__ = [
     "advance_running_pipeline_jobs",
     "build_step_job_params",
     "cancel_active_pipeline_children",
+    "count_blocking_children_for_step",
     "default_pipeline_params",
     "enqueue_pipeline_child_job",
     "enqueue_pipeline_job",
+    "fetch_blocking_child_for_enqueue",
+    "fetch_canonical_child_for_step",
     "fetch_latest_child_for_step",
     "handle_pipeline_parent_dequeued",
     "merge_pipeline_params",
     "normalize_pipeline_steps",
+    "pipeline_advisory_int_keys",
 ]

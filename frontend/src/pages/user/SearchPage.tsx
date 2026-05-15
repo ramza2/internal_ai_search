@@ -20,13 +20,8 @@ import type { SearchMode, SearchRequest, SearchResponse, SearchResultItem } from
 import { parseExtensionsFromInput } from "@/utils/parseExtensionsString";
 import { clearSearchSession, loadSearchSession, saveSearchSession } from "@/utils/searchSessionCache";
 import { formatRelevanceDisplay, formatScore } from "@/utils/format";
+import { getSearchModeLabel } from "@/utils/userFriendlyLabels";
 import styles from "./SearchPage.module.css";
-
-const MODE_LABEL: Record<SearchMode, string> = {
-  vector: "의미 검색",
-  keyword: "키워드 검색",
-  hybrid: "하이브리드 검색",
-};
 
 function sourcePillLabel(sourceType: string, dataSourceName: string): string {
   if (sourceType === "internal" || /사내|internal/i.test(dataSourceName)) return "사내 문서";
@@ -35,13 +30,13 @@ function sourcePillLabel(sourceType: string, dataSourceName: string): string {
 
 function buildSummaryLines(req: SearchRequest, scopeName?: string): string[] {
   const lines: string[] = [];
-  lines.push(`모드: ${MODE_LABEL[(req.search_mode ?? "vector") as SearchMode]} (${req.search_mode ?? "vector"})`);
-  lines.push(`소스: ${scopeName ?? (req.data_source_id ? req.data_source_id : "전체")}`);
-  lines.push(`limit: ${req.limit ?? 20} · min_score: ${req.min_score ?? 0}`);
+  lines.push(`검색 방식: ${getSearchModeLabel(req.search_mode ?? "vector")}`);
+  lines.push(`범위: ${scopeName ?? (req.data_source_id ? "선택한 저장소" : "전체")}`);
+  lines.push(`결과 수: ${req.limit ?? 20} · 최소 관련도: ${req.min_score ?? 0}`);
   if (req.include_extensions?.length) lines.push(`확장자: ${req.include_extensions.join(", ")}`);
   if (req.file_type) lines.push(`파일 유형: ${req.file_type}`);
   if (req.search_mode === "hybrid") {
-    lines.push(`가중치: vector ${req.vector_weight ?? 0.7} / keyword ${req.keyword_weight ?? 0.3}`);
+    lines.push(`가중치: 의미 ${req.vector_weight ?? 0.7} / 키워드 ${req.keyword_weight ?? 0.3}`);
   }
   return lines;
 }
@@ -175,9 +170,9 @@ export function SearchPage() {
               onChange={(e) => setSearchMode(e.target.value as SearchMode)}
               aria-label="검색 모드"
             >
-              <option value="vector">vector — 의미 검색</option>
-              <option value="keyword">keyword — 키워드 검색</option>
-              <option value="hybrid">hybrid — 하이브리드</option>
+              <option value="vector">의미 검색</option>
+              <option value="keyword">키워드 검색</option>
+              <option value="hybrid">통합 검색 (의미+키워드)</option>
             </Select>
             <Button type="submit" variant="primary" loading={loading} disabled={loading}>
               검색
@@ -190,7 +185,7 @@ export function SearchPage() {
           </div>
         </form>
 
-        <CollapsiblePanel title="고급 필터" summary="데이터 소스, 확장자, 파일 유형, 점수, hybrid 가중치 등">
+        <CollapsiblePanel title="고급 필터" summary="저장소 범위, 확장자, 최소 관련도, 통합 검색 가중치 등">
           <div className={styles.filterGrid}>
             <DataSourceSelect
               value={dataSourceId}
@@ -216,7 +211,7 @@ export function SearchPage() {
                 ))}
               </Select>
             </FormField>
-            <FormField label="결과 개수 (limit)">
+            <FormField label="결과 개수">
               <Select
                 value={String(limit)}
                 onChange={(e) => setLimit(Number.parseInt(e.target.value, 10))}
@@ -228,7 +223,7 @@ export function SearchPage() {
                 <option value="100">100</option>
               </Select>
             </FormField>
-            <FormField label="min_score (0~1)" hint="검색 API와 동일">
+            <FormField label="최소 관련도 (0~1)" hint="이 값보다 낮은 결과는 제외합니다">
               <Input
                 type="number"
                 min={0}
@@ -241,10 +236,10 @@ export function SearchPage() {
             </FormField>
             {searchMode === "hybrid" && (
               <>
-                <FormField label="vector_weight">
+                <FormField label="의미 검색 비중" hint="통합 검색에서 의미(벡터) 결과의 가중치">
                   <Input type="number" min={0} max={1} step={0.05} value={vectorW} onChange={(e) => setVectorW(e.target.value)} disabled={loading} />
                 </FormField>
-                <FormField label="keyword_weight">
+                <FormField label="키워드 검색 비중" hint="통합 검색에서 키워드 결과의 가중치">
                   <Input type="number" min={0} max={1} step={0.05} value={keywordW} onChange={(e) => setKeywordW(e.target.value)} disabled={loading} />
                 </FormField>
               </>
@@ -296,11 +291,16 @@ export function SearchPage() {
                       </div>
                       <p className={styles.path}>{r.remote_path ?? "—"}</p>
                       <p className={styles.snippet}>{r.snippet}</p>
-                      <p className={styles.scoreLine}>
-                        score {formatScore(r.score)} · final {formatScore(r.final_score)} · vec {formatScore(r.vector_score)} · kw{" "}
-                        {formatScore(r.keyword_score)}
-                      </p>
-                      <p className={styles.reasons}>match: {reasons}</p>
+                      <details className={styles.reasons}>
+                        <summary className="muted" style={{ cursor: "pointer", fontSize: "0.8rem" }}>
+                          상세 점수 보기
+                        </summary>
+                        <p className={styles.scoreLine} style={{ marginTop: "0.35rem" }}>
+                          관련도 {formatScore(r.final_score)} · 의미 {formatScore(r.vector_score)} · 키워드{" "}
+                          {formatScore(r.keyword_score)} · 원점수 {formatScore(r.score)}
+                        </p>
+                        <p style={{ margin: 0, fontSize: "0.8rem" }}>매칭: {reasons}</p>
+                      </details>
                       <p className={styles.reasons}>
                         라인 {r.start_line ?? "—"} – {r.end_line ?? "—"} · 소스 {r.data_source_name}
                       </p>

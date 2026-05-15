@@ -11,9 +11,17 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.db.database import get_db_connection
-from app.services.action_log_service import sanitize_error_message
+from app.services.pipeline_progress import (
+    compute_pipeline_summary_dict,
+    overlay_pipeline_counters_on_job_dict,
+    pipeline_steps_from_job_params,
+)
 from app.services.scan_jobs_service import sanitize_job_params_for_response
-from app.schemas.admin_pipeline_jobs import AdminJobChildItem, AdminJobChildrenResponse
+from app.schemas.admin_pipeline_jobs import (
+    AdminJobChildItem,
+    AdminJobChildrenResponse,
+    AdminJobChildrenSummary,
+)
 from app.schemas.admin_jobs import (
     AdminJobDetailResponse,
     AdminJobFailureItem,
@@ -163,6 +171,42 @@ def _normalize_job_row(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def batch_fetch_admin_children_rows_by_parent_ids(parent_ids: list[UUID]) -> dict[UUID, list[dict[str, Any]]]:
+    """Fetch child ``scan_jobs`` rows for many parents (one query). Used by admin list/dashboard."""
+    uids = list({u for u in parent_ids})
+    if not uids:
+        return {}
+    out: dict[UUID, list[dict[str, Any]]] = {u: [] for u in uids}
+    try:
+        with get_db_connection() as conn:
+            conn.row_factory = dict_row
+            with conn.cursor() as cur:
+                cols = _fetch_scan_jobs_columns(cur)
+                sel = _job_select_sql(cols)
+                cur.execute(
+                    f"""
+                    SELECT sj.parent_job_id AS _parent_id, {sel}
+                    FROM scan_jobs sj
+                    LEFT JOIN data_sources ds ON ds.id = sj.data_source_id
+                    LEFT JOIN app_users au ON au.id = sj.requested_by
+                    WHERE sj.parent_job_id = ANY(%s::uuid[])
+                    ORDER BY sj.parent_job_id, sj.created_at ASC NULLS LAST, sj.id ASC
+                    """,
+                    (uids,),
+                )
+                for r in cur.fetchall() or []:
+                    row = dict(r)
+                    pid = row.pop("_parent_id", None)
+                    if pid is None:
+                        continue
+                    pu = pid if isinstance(pid, UUID) else UUID(str(pid))
+                    out.setdefault(pu, []).append(row)
+        return out
+    except Exception:
+        logger.warning("batch_fetch_admin_children_rows_by_parent_ids failed", exc_info=True)
+        return {u: [] for u in uids}
+
+
 def list_admin_jobs(
     *,
     data_source_id: UUID | None,
@@ -232,7 +276,30 @@ def list_admin_jobs(
             message="Job list is empty",
         )
 
-    items = [AdminJobItem.model_validate(_normalize_job_row(dict(r))) for r in rows]
+    pipeline_ids: list[UUID] = []
+    for r in rows:
+        if str(r.get("job_type") or "").strip().upper() == "PIPELINE":
+            rid = r.get("id")
+            if rid is not None:
+                pipeline_ids.append(rid if isinstance(rid, UUID) else UUID(str(rid)))
+
+    children_map = batch_fetch_admin_children_rows_by_parent_ids(pipeline_ids)
+
+    items: list[AdminJobItem] = []
+    for r in rows:
+        row = _normalize_job_row(dict(r))
+        if str(row.get("job_type") or "").strip().upper() == "PIPELINE":
+            steps = pipeline_steps_from_job_params(row.get("job_params"))
+            if steps:
+                pid = row.get("id")
+                if pid is not None:
+                    pu = pid if isinstance(pid, UUID) else UUID(str(pid))
+                    kids = children_map.get(pu) or []
+                    kids_norm = [_normalize_job_row(dict(k)) for k in kids]
+                    summ = compute_pipeline_summary_dict(steps=steps, children_rows=kids_norm)
+                    row = overlay_pipeline_counters_on_job_dict(row, summ)
+                    row["pipeline_current_step"] = summ.get("current_step")
+        items.append(AdminJobItem.model_validate(row))
     msg = None
     if total == 0 and not warnings:
         msg = "Job list is empty"
@@ -278,7 +345,18 @@ def fetch_admin_job_detail(*, job_id: UUID) -> tuple[AdminJobDetailResponse | No
                     logger.debug("failures count: %s", exc, exc_info=False)
                     warnings.append("Could not count scan_failures rows")
 
-                job = AdminJobItem.model_validate(_normalize_job_row(dict(row)))
+                job_row = _normalize_job_row(dict(row))
+                if str(job_row.get("job_type") or "").strip().upper() == "PIPELINE":
+                    steps = pipeline_steps_from_job_params(job_row.get("job_params"))
+                    if steps:
+                        cmap = batch_fetch_admin_children_rows_by_parent_ids([job_id])
+                        kids = cmap.get(job_id) or []
+                        kids_norm = [_normalize_job_row(dict(k)) for k in kids]
+                        summ = compute_pipeline_summary_dict(steps=steps, children_rows=kids_norm)
+                        job_row = overlay_pipeline_counters_on_job_dict(job_row, summ)
+                        job_row["pipeline_current_step"] = summ.get("current_step")
+
+                job = AdminJobItem.model_validate(job_row)
     except psycopg.errors.UndefinedTable:
         logger.warning("admin job detail: scan_jobs unavailable", exc_info=False)
         return None, "scan_jobs_missing"
@@ -305,6 +383,12 @@ def list_admin_job_children(*, parent_job_id: UUID) -> tuple[AdminJobChildrenRes
                 cur.execute("SELECT 1 FROM scan_jobs WHERE id = %s", (parent_job_id,))
                 if cur.fetchone() is None:
                     return None, "not_found"
+
+                cur.execute(
+                    "SELECT job_type::text AS job_type, job_params FROM scan_jobs WHERE id = %s",
+                    (parent_job_id,),
+                )
+                parent_meta = cur.fetchone() or {}
 
                 cols = _fetch_scan_jobs_columns(cur)
                 sel = _job_select_sql(cols)
@@ -337,10 +421,30 @@ def list_admin_job_children(*, parent_job_id: UUID) -> tuple[AdminJobChildrenRes
                 status=str(row.get("status") or ""),
                 started_at=row.get("started_at"),
                 finished_at=row.get("finished_at"),
+                duration_ms=row.get("duration_ms"),
                 progress_percent=row.get("progress_percent"),
+                error_message=sanitize_error_message(row.get("error_message")),
             )
         )
-    return AdminJobChildrenResponse(parent_job_id=parent_job_id, items=items, total=len(items)), None
+
+    summary: AdminJobChildrenSummary | None = None
+    if str(parent_meta.get("job_type") or "").strip().upper() == "PIPELINE":
+        steps = pipeline_steps_from_job_params(parent_meta.get("job_params"))
+        if steps:
+            raw_children = [_normalize_job_row(dict(r)) for r in rows]
+            summary = AdminJobChildrenSummary.model_validate(
+                compute_pipeline_summary_dict(steps=steps, children_rows=raw_children)
+            )
+
+    return (
+        AdminJobChildrenResponse(
+            parent_job_id=parent_job_id,
+            items=items,
+            total=len(items),
+            summary=summary,
+        ),
+        None,
+    )
 
 
 def list_admin_job_failures(
@@ -411,6 +515,7 @@ def list_admin_job_failures(
 
 
 __all__ = [
+    "batch_fetch_admin_children_rows_by_parent_ids",
     "fetch_admin_job_detail",
     "list_admin_job_children",
     "list_admin_job_failures",

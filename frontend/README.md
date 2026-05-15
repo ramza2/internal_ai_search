@@ -11,7 +11,8 @@ Vite + React + TypeScript 기반 웹 UI. 백엔드(FastAPI)와 JWT 인증으로 
 ## 현재 UI 구조
 
 - **디자인 토큰:** `src/styles/global.css`의 `:root` 변수(`--color-primary`, `--color-bg`, `--color-surface`, `--color-muted`, `--color-danger`, `--radius-*`, `--shadow-card` 등).
-- **공통 UI:** `src/components/ui/` (`Button`, `Input`, `Select`, `Textarea`, `Badge`, `Card`, `CollapsiblePanel`, `PageHeader`, `SectionCard`, `DataTable`, `FilterBar`/`FilterField`, `FormField`, `StatCard`, `ConfirmDialog`, `PaginationBar`, `DataSourceSelect`, `StatusBadge`, `RoleBadge`, `ResultBadge` 등).
+- **공통 UI:** `src/components/ui/` (`Button`, `Input`, `Select`, `Textarea`, `Badge`, `Card`, `CollapsiblePanel`, `PageHeader`, `SectionCard`, `DataTable`, `FilterBar`/`FilterField`, `FormField`, `StatCard`, `ConfirmDialog`, `PaginationBar`, `DataSourceSelect`, `StatusBadge`, `RoleBadge`, `ResultBadge`, **`HelpText`**, **`InfoBox`**, **`AdvancedSection`** 등).
+- **사용자 친화 문구:** `src/utils/userFriendlyLabels.ts` — 작업 종류·상태·파이프라인 단계·검색 모드 등 API enum의 한글 표시. 개발자용 raw 값(`job_type`, `status`, `chunk_id` 등)은 상세·고급(`<details>` / `AdvancedSection`) 영역에만 노출합니다.
 - **레이아웃:** `MainLayout` — 좌측 고정 사이드바(`--sidebar-width`), 상단 헤더, 본문 `pageShell`(max-width 1240px). `AuthLayout` — 상단 브랜딩 + 중앙 카드.
 
 ## 페이지 목록
@@ -34,14 +35,17 @@ Vite + React + TypeScript 기반 웹 UI. 백엔드(FastAPI)와 JWT 인증으로 
 
 ## 관리자 대시보드 (`/admin`)
 
-- **`GET /api/admin/dashboard/summary`** 한 번으로 사용자·데이터 소스·파일(`analysis_status`별)·chunk/embedding·최근 24시간 활동(`SEARCH` / `RAG_QUESTION` / `LOGIN` / 실패 건수)·최근 스캔 작업 5건·최근 감사 로그 10건(본문 `detail` 없음)·문제 지표 카드용 카운트를 받습니다.
+- **`GET /api/admin/dashboard/summary`** 한 번으로 사용자·데이터 소스·파일(`analysis_status`별)·chunk/embedding·최근 24시간 활동(`SEARCH` / `RAG_QUESTION` / `LOGIN` / 실패 건수)·최근 스캔 작업 5건·최근 감사 로그 10건(본문 `detail` 없음)·**서버 파이프라인(`pipelines` 카운트 + `recent_pipeline_jobs` 표)**·문제 지표 카드용 카운트를 받습니다.
 - **최근 스캔 작업** 테이블의 `job_type`은 `getJobTypeLabel` / `getJobStatusBadgeVariant`(`src/utils/jobLabels.ts`)로 작업 목록과 동일한 한글·배지 규칙을 씁니다.
+- **서버 파이프라인:** `pipelines` 통계 카드와 **`recent_pipeline_jobs`** 테이블(소스·상태·진행률·현재 단계·시작)이 추가되었으며, 상세 단계·하위 Job은 **`/admin/jobs`** 링크로 이동해 확인하는 흐름을 권장합니다.
 - 화면: `PageHeader`(설명 + **새로고침**), `SectionCard` + `StatCard` 그리드, 문제 항목별 **관리 페이지 링크**, `DataTable` 두 개(스캔 작업 / 최근 활동), 하단 **바로 가기** 카드. **차트 라이브러리는 사용하지 않음**(카드·테이블만).
 - 최초 `Loading`, API 실패 시 `ErrorMessage` + 다시 시도, 스캔/활동 테이블은 빈 배열이면 `EmptyState`. 새로고침 중 버튼 비활성화.
 
 ## 관리자 작업 목록 (`/admin/jobs`)과 Worker 스켈레톤 검증
 
 - **작업 목록**은 `GET /api/admin/jobs`로 `scan_jobs`를 조회합니다. `PENDING` / `RUNNING` / `CANCELLING` / `COMPLETED` / `FAILED` / `CANCELLED` 등 상태는 배지(`getJobStatusBadgeVariant`)로 표시하고, **`worker_id`**, **`heartbeat_at`**, **`priority`**, **`job_params`**(목록·상세)를 확인할 수 있습니다.
+- **`PIPELINE`(서버 파이프라인) 목록 행:** 작업 유형 아래에 **서버 주도 파이프라인** 안내가 붙고, **진행** 열에는 자식 Job 기준 **진행 바·%·완료 단계 수/전체 단계·현재 단계(한글)** 를 표시합니다(`progress_percent`, `pipeline_current_step`, 오버레이된 `*_files` 카운터 — 백엔드 README의 PIPELINE 해석과 동일).
+- **PIPELINE 상세 모달:** 상단에 하위 Job 기준 **요약**(진행률 바, 완료/실패·RUNNING/PENDING 카운트, 현재 단계), **`job_params.steps` 순서의 단계 카드**(상태 배지·진행률·child job id·시작/종료·소요·오류 요약·**상세 보기**), 접을 수 있는 **전체 하위 Job 테이블**을 함께 둡니다. `GET .../children`의 **`summary`** 필드를 사용합니다.
 - **취소:** `POST /api/admin/jobs/{job_id}/cancel` — 목록·상세에서 **취소** / **취소 요청** / **취소 요청 중**(비활성) 버튼으로 호출합니다. **`PENDING`**은 즉시 **`CANCELLED`**로 끝나고, **`RUNNING`**은 **`CANCELLING`**으로 바뀐 뒤 worker가 **다음 안전 지점**에서 **`CANCELLED`**로 마무리합니다(동기 `sync-tree` API와 무관).
 - **Stale heartbeat 표시:** `RUNNING`이면서 **`heartbeat_at`**이 클라이언트 기준 **30분** 이상 지난 경우 **「heartbeat 지연」** 배지를 둘 수 있습니다. 실제 정리 기준은 백엔드 **`WORKER_STALE_TIMEOUT_MINUTES`**와 동일하게 맞추려면 추후 설정/환경 변수 연동이 필요합니다(TODO).
 - **백그라운드 텍스트 처리:** `POST /api/admin/jobs/process-pending-text`로 **PROCESS_PENDING_TEXT** 큐 Job 생성. **백그라운드 동기화**와 동일하게 worker 실행이 필요합니다. **PipelineRunModal**(백그라운드 실행 모드)·`/admin/jobs`·데이터 소스의 동기 `process-pending-text`(dry_run 포함)와 병행 가능한 별도 경로입니다.
@@ -139,7 +143,7 @@ npm run preview
 - **실행 모드 (기본: 백그라운드 실행)**
   - **즉시 실행:** 각 단계가 **동기** `POST /api/data-sources/{id}/...` 를 호출하며, 브라우저가 응답이 올 때까지 기다립니다. **권장 순서로 전체 실행**도 이 모드에서만 표시되며, 기존과 같이 5단계를 순차 HTTP로 실행합니다.
   - **백그라운드 실행:** 실제 작업 등록은 `src/api/adminJobsApi.ts`의 **`postAdminPipelineJob`**(권장, **`POST /api/admin/pipeline-jobs`**) 또는 **`postAdminSyncTreeJob`**, **`postAdminProcessPendingTextJob`**, **`postAdminProcessPendingDocumentsJob`**, **`postAdminChunkCompletedTextJob`**, **`postAdminEmbedPendingChunksJob`** 으로 각각 **`POST /api/admin/jobs/...`** 에 대응합니다. **대상 확인(dry_run)** 은 동기 API 그대로 사용합니다. 개별 Job 경로에서는 Job 생성 후 **`getAdminJob`** 으로 단계 카드에 상태·`progress_percent` 등을 표시합니다. **`PIPELINE`** 부모는 **`getAdminJobChildren`** 으로 하위 Job 목록을 `/admin/jobs` 상세에서 볼 수 있습니다. **상태 새로고침** 버튼과, 기본 꺼짐인 **자동 새로고침(5초)** 체크박스가 있으며, 모달을 닫으면 자동 폴링이 중지됩니다. **`POST /api/admin/jobs/{job_id}/cancel`** 은 `/admin/jobs` 와 동일 정책( **취소** / **취소 요청** / **취소 요청 중** )으로 단계 카드에서 호출할 수 있습니다.
-  - **서버 파이프라인(권장):** **서버 파이프라인 Job 생성** 은 모달에 입력한 옵션으로 **`postAdminPipelineJob`** 을 호출합니다. worker가 부모 **`PIPELINE`** Job을 잡은 뒤 하위 Job을 순차 등록하므로 **브라우저를 닫아도** 인덱싱 단계가 이어집니다. 진행 상황은 **`/admin/jobs`** 에서 부모·하위 행으로 확인합니다.
+  - **서버 파이프라인(권장):** **서버 파이프라인 Job 생성** 은 모달에 입력한 옵션으로 **`postAdminPipelineJob`** 을 호출합니다. worker가 부모 **`PIPELINE`** Job을 잡은 뒤 하위 Job을 순차 등록하므로 **브라우저를 닫아도** 인덱싱 단계가 이어집니다. 생성 직후에는 **`pipeline_job_id`** 안내와 **`/admin/jobs`** 링크 위주로 안내하며, **진행률·단계별 상태·하위 Job 상세**는 작업 목록의 PIPELINE 상세(및 대시보드의 최근 파이프라인)에서 확인하는 흐름입니다. **`getAdminJobChildren`** 즉시 호출은 하지 않아도 됩니다.
   - **브라우저 순차 Job 등록 (레거시):** **브라우저 순차 Job 등록** 은 **parent 없이** 브라우저가 Job을 하나씩 만들고, 이전 단계가 **`COMPLETED`** 또는 **`PARTIAL`** 이 될 때까지 **`getAdminJob`** 으로 5초 간격 폴링한 뒤 다음 단계를 등록합니다. **`FAILED`** / **`CANCELLED`** 이면 중단합니다. **`CANCELLING`** 은 계속 대기합니다(백엔드가 종료 상태로 바꿀 때까지). **HTTP 오류** 시에도 중단됩니다. **`/admin/jobs`** 목록에는 서로 독립인 Job이 최대 5개까지 올라갑니다. **한계:** 브라우저 탭을 닫거나 새로고침하면 **이미 생성된 Job은 worker에서 계속**될 수 있지만, **아직 등록되지 않은 다음 단계는 자동으로 만들어지지 않을 수 있습니다.**
 - **dry_run:** 텍스트·문서·Chunk·Embedding 단계의 **대상 확인** 버튼은 서버가 대상만 계산하고 DB/다운로드를 바꾸지 않는 호출입니다. **즉시 실행** 모드에서 **실제 실행**은 DB·파일 처리가 일어날 수 있으며 공통 확인 다이얼로그를 거칩니다. **sync-tree**는 dry_run이 없으므로 **동기화 실행**(즉시 모드) 또는 **동기화 Job 생성**(백그라운드 모드) 전에 옵션을 확인하세요.
 - **권장 순서로 전체 실행 (즉시 모드):** 모달 상단 버튼으로 위 5단계를 **브라우저에서 순차 호출**합니다. 각 카드에 입력한 옵션(limit, 경로, 확장자 등)은 그대로 쓰이며, **자동 실행만 `dry_run=false`로 강제**됩니다(카드에 dry_run이 켜져 있어도 무시). 자동 실행 전에는 단계별 **대상 확인(dry_run)** 을 권장합니다.

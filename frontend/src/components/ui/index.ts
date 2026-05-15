@@ -1,4 +1,7 @@
+export { AdvancedSection } from "./AdvancedSection";
 export { Badge } from "./Badge";
+export { HelpText } from "./HelpText";
+export { InfoBox } from "./InfoBox";
 export type { BadgeVariant } from "./Badge";
 export { Button } from "./Button";
 export type { ButtonProps, ButtonVariant, ButtonSize } from "./Button";

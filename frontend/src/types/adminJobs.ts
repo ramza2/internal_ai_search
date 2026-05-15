@@ -34,6 +34,8 @@ export interface AdminJob {
   max_retries?: number;
   /** Higher = higher dequeue priority (backend convention) */
   priority?: number;
+  /** PIPELINE parent only: current frontier step job_type code from child aggregation */
+  pipeline_current_step?: string | null;
 }
 
 export interface AdminJobListResponse {
@@ -240,7 +242,21 @@ export type AdminJobChildItem = {
   status: string;
   started_at: string | null;
   finished_at: string | null;
+  duration_ms?: number | null;
   progress_percent: number | null;
+  error_message?: string | null;
+};
+
+export type AdminJobChildrenSummary = {
+  total_steps: number;
+  completed_steps: number;
+  running_steps: number;
+  pending_steps: number;
+  failed_steps: number;
+  cancelled_steps: number;
+  partial_steps: number;
+  progress_percent: number;
+  current_step: string | null;
 };
 
 export type AdminJobChildrenResponse = {
@@ -248,4 +264,5 @@ export type AdminJobChildrenResponse = {
   parent_job_id: string;
   items: AdminJobChildItem[];
   total: number;
+  summary?: AdminJobChildrenSummary | null;
 };

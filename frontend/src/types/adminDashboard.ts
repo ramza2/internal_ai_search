@@ -84,11 +84,29 @@ export interface DashboardProblemItems {
   pending_users_count: number;
 }
 
+export interface DashboardPipelinesSummary {
+  running: number;
+  pending: number;
+  failed_24h: number;
+  completed_24h: number;
+}
+
+export interface RecentPipelineJobItem {
+  id: string;
+  data_source_name: string | null;
+  status: string;
+  progress_percent: number;
+  current_step: string | null;
+  started_at: string | null;
+}
+
 export interface DashboardSummaryResponse {
   status: string;
   summary: DashboardSummaryBlock;
   recent_scan_jobs: RecentScanJobItem[];
   recent_actions: RecentActionItem[];
   problem_items: DashboardProblemItems;
+  pipelines?: DashboardPipelinesSummary;
+  recent_pipeline_jobs?: RecentPipelineJobItem[];
   message: string;
 }

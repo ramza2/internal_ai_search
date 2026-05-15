@@ -6,14 +6,21 @@ import * as dsApi from "@/api/dataSourceApi";
 import { getApiErrorMessage } from "@/api/httpClient";
 import { ErrorMessage } from "@/components/ErrorMessage";
 import {
+  AdvancedSection,
   Badge,
   Button,
   ConfirmDialog,
   FormField,
+  HelpText,
+  InfoBox,
   Input,
   SectionCard,
   Select,
 } from "@/components/ui";
+import {
+  PIPELINE_MODAL_STEP_LABELS,
+  PIPELINE_STEP_DESCRIPTIONS,
+} from "@/utils/userFriendlyLabels";
 import type { DataSource } from "@/types/dataSource";
 import type { DocumentProcessResponse } from "@/types/documentProcessing";
 import type { AdminPipelineJobRequest } from "@/types/adminJobs";
@@ -47,11 +54,11 @@ type StepSnap = {
 };
 
 const STEP_LABEL: Record<StepId, string> = {
-  sync: "1. WebDAV 재귀 동기화",
-  text: "2. 일반 텍스트 파일 처리",
-  doc: "3. 문서 파일 처리",
-  chunk: "4. Chunk 생성",
-  embed: "5. Embedding 생성",
+  sync: PIPELINE_MODAL_STEP_LABELS.sync,
+  text: PIPELINE_MODAL_STEP_LABELS.text,
+  doc: PIPELINE_MODAL_STEP_LABELS.doc,
+  chunk: PIPELINE_MODAL_STEP_LABELS.chunk,
+  embed: PIPELINE_MODAL_STEP_LABELS.embed,
 };
 
 const STEP_TO_AUTO_KEY: Record<StepId, PipelineAutoStepKey> = {
@@ -101,7 +108,7 @@ const BG_AUTO_CONFIRM_MSG =
   "백그라운드 파이프라인을 순차 등록합니다. 각 단계가 완료되면 다음 단계 Job을 생성합니다. 브라우저를 닫으면 현재 실행 중인 Job은 계속 처리되지만 다음 단계 자동 등록은 중단될 수 있습니다. 계속하시겠습니까?";
 
 const SERVER_PIPELINE_CONFIRM_MSG =
-  "서버가 PIPELINE 부모 Job을 생성하고, DB worker가 단계별 하위 Job을 순차 등록합니다. 브라우저를 닫아도 전체 파이프라인이 이어집니다. 계속하시겠습니까?";
+  "전체 검색 반영 작업을 등록합니다. 서버가 단계별로 순서대로 처리하며, 브라우저를 닫아도 작업이 이어집니다. 계속하시겠습니까?";
 
 function canShowJobCancelButton(status: string | undefined): boolean {
   const u = (status || "").toUpperCase();
@@ -137,11 +144,11 @@ function initialAutoSteps(): PipelineAutoStepState[] {
 }
 
 const AUTO_KEY_TO_LABEL: Record<PipelineAutoStepKey, string> = {
-  sync: "WebDAV 재귀 동기화",
-  text: "일반 텍스트 처리",
-  document: "문서 파일 처리",
-  chunk: "Chunk 생성",
-  embedding: "Embedding 생성",
+  sync: "파일 목록 수집",
+  text: "텍스트 파일 내용 추출",
+  document: "문서 파일 내용 추출",
+  chunk: "검색 단위 생성",
+  embedding: "검색 인덱스 생성",
 };
 
 type Props = {
@@ -1014,26 +1021,23 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
       >
         <div className={docStyles.panel} onMouseDown={(e) => e.stopPropagation()}>
           <SectionCard
-            title="인덱싱 파이프라인 실행"
+            title="검색 반영 작업 실행"
             actions={
               <Button type="button" variant="ghost" size="sm" onClick={handleModalClose} disabled={closeDisabled}>
                 닫기
               </Button>
             }
           >
-            <p className="muted" style={{ marginTop: 0 }}>
-              <strong>{dataSource.name}</strong> — WebDAV 파일 수집부터 텍스트/문서 추출, Chunk 생성, Embedding 생성까지 단계별로 실행합니다.
-            </p>
-            <ul className="muted" style={{ margin: "0.35rem 0 0", paddingLeft: "1.2rem", fontSize: "0.875rem" }}>
-              <li>각 단계는 개별 실행할 수 있으며, 대량 작업 전에는 dry_run으로 대상 확인을 권장합니다.</li>
+            <InfoBox title={`저장소: ${dataSource.name}`}>
+              저장소의 파일을 수집하고 내용을 분석한 뒤, AI 검색에 반영합니다. 파일이 많을 경우{" "}
+              <strong>백그라운드 실행</strong>을 권장합니다. 브라우저를 닫아도 서버에서 작업이 계속 진행됩니다.
+            </InfoBox>
+            <ul className="muted" style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem", fontSize: "0.875rem" }}>
+              <li>각 단계는 따로 실행할 수 있습니다. 대량 작업 전에는 <strong>대상 확인</strong>을 권장합니다.</li>
               <li>
-                <strong>대상 확인</strong>은 실제 파일 다운로드/DB 변경 없이 대상만 확인합니다. <strong>실제 실행</strong>은 DB 상태를 바꿀 수 있습니다.
+                <strong>대상 확인</strong>은 실제로 저장하지 않고 처리 대상만 확인합니다. <strong>실제 실행</strong>은 DB 상태를 바꿀 수 있습니다.
               </li>
-              <li>동기화(Step 1)는 dry_run 옵션이 없습니다. 실행 전 범위를 확인하세요.</li>
-              <li>
-                <strong>즉시 실행</strong> 모드에서 &quot;권장 순서로 전체 실행&quot;은 dry_run 없이 동기 API를 연속 호출합니다.{" "}
-                <strong>백그라운드 실행</strong> 모드에서는 단계별로 Job만 등록합니다.
-              </li>
+              <li>파일 목록 수집(1단계)은 대상 확인이 없습니다. 실행 전 범위를 확인하세요.</li>
             </ul>
 
             <div className={styles.execModeRow} role="radiogroup" aria-label="실행 모드">
@@ -1046,7 +1050,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                   onChange={() => setExecutionMode("immediate")}
                   disabled={formDisabled}
                 />
-                즉시 실행
+                바로 실행
               </label>
               <label className={styles.check}>
                 <input
@@ -1061,11 +1065,11 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
             </div>
             <p className="muted" style={{ fontSize: "0.8rem", marginTop: "0.35rem", marginBottom: 0 }}>
               {executionMode === "immediate" ? (
-                <>즉시 실행: 현재 브라우저 요청 안에서 API가 완료될 때까지 기다립니다.</>
+                <>바로 실행: 현재 브라우저에서 각 단계가 끝날 때까지 기다립니다.</>
               ) : (
                 <>
-                  백그라운드 실행: 작업을 Job으로 등록하고 worker가 처리합니다. 대량 파일 처리에 권장됩니다. 전체 목록은{" "}
-                  <Link to="/admin/jobs">/admin/jobs</Link>에서 확인할 수 있습니다.
+                  백그라운드 실행: 작업을 등록하고 서버가 순서대로 처리합니다. 대량 파일에 권장합니다. 진행 상황은{" "}
+                  <Link to="/admin/jobs">작업 목록</Link>에서 확인할 수 있습니다.
                 </>
               )}
             </p>
@@ -1140,22 +1144,27 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     disabled={disableManualActions}
                     onClick={() => setConfirmServerPipelineOpen(true)}
                   >
-                    서버 파이프라인 Job 생성 (권장)
+                    전체 작업 등록 (권장)
                   </Button>
                   <span className="muted" style={{ fontSize: "0.8rem", maxWidth: "32rem" }}>
-                    PIPELINE 부모 Job 1건이 등록되고 worker가 하위 Job을 순차 생성·실행합니다. 브라우저를 닫아도 진행이 이어집니다.
+                    5단계를 한 번에 등록합니다. 서버가 순서대로 처리하며, 브라우저를 닫아도 이어집니다.
                   </span>
                 </div>
                 <ErrorMessage message={serverPipelineErr} />
                 {serverPipelineJobId ? (
                   <div className="alert alertSuccess" style={{ fontSize: "0.85rem" }}>
-                    <strong>파이프라인 Job이 등록되었습니다.</strong>{" "}
-                    <span className="muted">job_id: {serverPipelineJobId}</span>
-                    <div style={{ marginTop: "0.35rem" }}>
-                      <Link to="/admin/jobs" className="btn btnSecondary btnSm">
-                        /admin/jobs 에서 진행 상황 보기
-                      </Link>
-                    </div>
+                    <strong>서버 파이프라인 Job이 등록되었습니다.</strong>
+                    <ul style={{ margin: "0.45rem 0 0", paddingLeft: "1.15rem", fontSize: "0.82rem" }}>
+                      <li>
+                        <strong>pipeline_job_id:</strong> <code style={{ fontSize: "0.8rem" }}>{serverPipelineJobId}</code>
+                      </li>
+                      <li>
+                        상태·진행률·단계별 하위 Job은{" "}
+                        <Link to="/admin/jobs">/admin/jobs (작업 목록)</Link>에서 확인하세요.
+                      </li>
+                      <li>브라우저를 닫아도 DB worker가 파이프라인을 이어서 처리합니다.</li>
+                      <li>진행률과 하위 단계는 작업 목록의 PIPELINE 상세에서 확인하는 것이 가장 정확합니다.</li>
+                    </ul>
                   </div>
                 ) : null}
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
@@ -1166,10 +1175,10 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     disabled={disableManualActions}
                     onClick={() => setConfirmBgAutoOpen(true)}
                   >
-                    브라우저 순차 Job 등록 (레거시)
+                    브라우저에서 단계별 등록 (레거시)
                   </Button>
                   <span className="muted" style={{ fontSize: "0.8rem", maxWidth: "32rem" }}>
-                    parent 없이 개별 Job을 브라우저가 순서대로 등록합니다. 브라우저를 닫으면 이후 단계 자동 등록이 중단될 수 있습니다.
+                    단계마다 개별 작업을 브라우저가 등록합니다. 브라우저를 닫으면 이후 단계 등록이 중단될 수 있습니다.
                   </span>
                 </div>
               </div>
@@ -1310,11 +1319,13 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
 
           <div className={styles.stepStack}>
             <SectionCard title={STEP_LABEL.sync}>
+              <HelpText>{PIPELINE_STEP_DESCRIPTIONS.sync}</HelpText>
+              <AdvancedSection title="고급 설정" summary="폴더 깊이·항목 수·숨김 파일 등">
               <div className="formGrid" style={{ maxWidth: 640 }}>
-                <FormField label="start_path">
+                <FormField label="시작 폴더">
                   <Input value={startPath} onChange={(e) => setStartPath(e.target.value)} disabled={formDisabled} />
                 </FormField>
-                <FormField label="max_depth">
+                <FormField label="최대 폴더 깊이">
                   <Input
                     type="number"
                     value={maxDepth}
@@ -1324,7 +1335,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     disabled={formDisabled}
                   />
                 </FormField>
-                <FormField label="max_items">
+                <FormField label="최대 항목 수">
                   <Input
                     type="number"
                     value={maxItems}
@@ -1341,7 +1352,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     onChange={(e) => setIncludeHidden(e.target.checked)}
                     disabled={formDisabled}
                   />
-                  include_hidden
+                  숨김 파일 포함
                 </label>
                 <label className={styles.check}>
                   <input
@@ -1350,7 +1361,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     onChange={(e) => setApplyExclusions(e.target.checked)}
                     disabled={formDisabled}
                   />
-                  apply_exclusions
+                  제외 규칙 적용
                 </label>
                 <label className={styles.check}>
                   <input
@@ -1359,9 +1370,10 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     onChange={(e) => setDetectDeleted(e.target.checked)}
                     disabled={formDisabled}
                   />
-                  detect_deleted
+                  삭제된 파일 감지
                 </label>
               </div>
+              </AdvancedSection>
               {executionMode === "immediate" ? (
                 <Button
                   type="button"
@@ -1385,7 +1397,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     )
                   }
                 >
-                  동기화 실행
+                  파일 목록 수집 실행
                 </Button>
               ) : (
                 <Button
@@ -1397,7 +1409,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                   disabled={disableManualActions && bgEnqueueStep !== "sync"}
                   onClick={() => void handleBgEnqueue("sync")}
                 >
-                  동기화 Job 생성
+                  파일 목록 수집 작업 등록
                 </Button>
               )}
               {executionMode === "background" && (
@@ -1412,8 +1424,10 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
             </SectionCard>
 
             <SectionCard title={STEP_LABEL.text}>
+              <HelpText>{PIPELINE_STEP_DESCRIPTIONS.text}</HelpText>
+              <AdvancedSection title="고급 설정" summary="처리 건수·파일 크기·확장자">
               <div className="formGrid" style={{ maxWidth: 640 }}>
-                <FormField label="limit">
+                <FormField label="한 번에 처리할 파일 수">
                   <Select
                     value={String(textLimit)}
                     onChange={(e) => setTextLimit(Number(e.target.value))}
@@ -1426,7 +1440,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     ))}
                   </Select>
                 </FormField>
-                <FormField label="max_file_size_mb">
+                <FormField label="최대 파일 크기">
                   <Select
                     value={String(textMaxMb)}
                     onChange={(e) => setTextMaxMb(Number(e.target.value))}
@@ -1439,10 +1453,11 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     ))}
                   </Select>
                 </FormField>
-                <FormField label="include_extensions" hint="쉼표 구분, 비우면 전체 허용">
+                <FormField label="대상 확장자" hint="쉼표로 구분. 비우면 전체 허용">
                   <Input value={textIncludeExt} onChange={(e) => setTextIncludeExt(e.target.value)} disabled={formDisabled} />
                 </FormField>
               </div>
+              </AdvancedSection>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.65rem" }}>
                 <Button
                   type="button"
@@ -1494,7 +1509,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     disabled={disableManualActions && bgEnqueueStep !== "text"}
                     onClick={() => void handleBgEnqueue("text")}
                   >
-                    텍스트 처리 Job 생성
+                    텍스트 추출 작업 등록
                   </Button>
                 )}
               </div>
@@ -1510,6 +1525,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
             </SectionCard>
 
             <SectionCard title={STEP_LABEL.doc}>
+              <HelpText>{PIPELINE_STEP_DESCRIPTIONS.document}</HelpText>
               <DocumentProcessingPanel
                 dataSourceId={dataSource.id}
                 dataSourceName={dataSource.name}
@@ -1533,7 +1549,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                       disabled={disableManualActions && bgEnqueueStep !== "doc"}
                       onClick={() => void handleBgEnqueue("doc")}
                     >
-                      문서 처리 Job 생성
+                      문서 추출 작업 등록
                     </Button>
                   </div>
                   <BackgroundJobSection
@@ -1548,8 +1564,10 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
             </SectionCard>
 
             <SectionCard title={STEP_LABEL.chunk}>
+              <HelpText>{PIPELINE_STEP_DESCRIPTIONS.chunk}</HelpText>
+              <AdvancedSection title="고급 설정" summary="단위 크기·겹침·재처리">
               <div className="formGrid" style={{ maxWidth: 640 }}>
-                <FormField label="limit">
+                <FormField label="한 번에 처리할 파일 수">
                   <Select
                     value={String(chunkLimit)}
                     onChange={(e) => setChunkLimit(Number(e.target.value))}
@@ -1562,7 +1580,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     ))}
                   </Select>
                 </FormField>
-                <FormField label="chunk_size">
+                <FormField label="검색 단위 크기">
                   <Input
                     type="number"
                     value={chunkSize}
@@ -1570,7 +1588,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     disabled={formDisabled}
                   />
                 </FormField>
-                <FormField label="chunk_overlap">
+                <FormField label="단위 겹침">
                   <Input
                     type="number"
                     value={chunkOverlap}
@@ -1578,7 +1596,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     disabled={formDisabled}
                   />
                 </FormField>
-                <FormField label="min_chunk_size">
+                <FormField label="최소 단위 크기">
                   <Input
                     type="number"
                     value={chunkMin}
@@ -1593,9 +1611,9 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     onChange={(e) => setChunkReprocess(e.target.checked)}
                     disabled={formDisabled}
                   />
-                  reprocess
+                  기존 결과 다시 만들기
                 </label>
-                <FormField label="include_extensions" hint="선택">
+                <FormField label="대상 확장자" hint="선택">
                   <Input
                     value={chunkIncludeExt}
                     onChange={(e) => setChunkIncludeExt(e.target.value)}
@@ -1604,6 +1622,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                   />
                 </FormField>
               </div>
+              </AdvancedSection>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.65rem" }}>
                 <Button
                   type="button"
@@ -1661,7 +1680,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     disabled={disableManualActions && bgEnqueueStep !== "chunk"}
                     onClick={() => void handleBgEnqueue("chunk")}
                   >
-                    Chunk 생성 Job 생성
+                    검색 단위 생성 작업 등록
                   </Button>
                 )}
               </div>
@@ -1677,8 +1696,10 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
             </SectionCard>
 
             <SectionCard title={STEP_LABEL.embed}>
+              <HelpText>{PIPELINE_STEP_DESCRIPTIONS.embedding}</HelpText>
+              <AdvancedSection title="고급 설정" summary="배치 크기·재인덱싱·확장자">
               <div className="formGrid" style={{ maxWidth: 640 }}>
-                <FormField label="limit">
+                <FormField label="한 번에 처리할 단위 수">
                   <Select
                     value={String(embedLimit)}
                     onChange={(e) => setEmbedLimit(Number(e.target.value))}
@@ -1691,7 +1712,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     ))}
                   </Select>
                 </FormField>
-                <FormField label="batch_size">
+                <FormField label="배치 크기">
                   <Input
                     type="number"
                     value={embedBatch}
@@ -1708,12 +1729,13 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     onChange={(e) => setEmbedReembed(e.target.checked)}
                     disabled={formDisabled}
                   />
-                  reembed
+                  기존 인덱스 다시 만들기
                 </label>
-                <FormField label="include_extensions" hint="선택">
+                <FormField label="대상 확장자" hint="선택">
                   <Input value={embedIncludeExt} onChange={(e) => setEmbedIncludeExt(e.target.value)} disabled={formDisabled} />
                 </FormField>
               </div>
+              </AdvancedSection>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.65rem" }}>
                 <Button
                   type="button"
@@ -1767,7 +1789,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     disabled={disableManualActions && bgEnqueueStep !== "embed"}
                     onClick={() => void handleBgEnqueue("embed")}
                   >
-                    Embedding 생성 Job 생성
+                    검색 인덱스 생성 작업 등록
                   </Button>
                 )}
               </div>

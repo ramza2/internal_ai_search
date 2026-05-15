@@ -23,14 +23,9 @@ import type { AnswerCitation, AnswerRequest, AnswerResponse, ContextPreviewItem 
 import type { SearchMode } from "@/types/search";
 import { clearRagSession, loadRagSession, saveRagSession } from "@/utils/ragSessionCache";
 import { formatScore } from "@/utils/format";
+import { getSearchModeLabel } from "@/utils/userFriendlyLabels";
 import { parseExtensionsFromInput } from "@/utils/parseExtensionsString";
 import styles from "./AnswerPage.module.css";
-
-const MODE_LABEL: Record<SearchMode, string> = {
-  vector: "의미 검색",
-  keyword: "키워드 검색",
-  hybrid: "하이브리드 검색",
-};
 
 const INSUFFICIENT_PHRASE = "제공된 문서만으로는 답변하기 어렵습니다.";
 
@@ -257,7 +252,7 @@ export function AnswerPage() {
               )}
               <label className={styles.check}>
                 <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} disabled={loading} />
-                dry_run (LLM 호출 없이 컨텍스트 미리보기)
+                대상 확인만 (답변 생성 없이 참고 문서만 확인)
               </label>
             </div>
           </CollapsiblePanel>
@@ -280,7 +275,7 @@ export function AnswerPage() {
       {data && (
         <>
           {data.dry_run && data.context_preview && data.context_preview.length > 0 ? (
-            <SectionCard title="컨텍스트 미리보기 (dry_run)">
+            <SectionCard title="참고 문서 미리보기 (대상 확인)">
               <DataTable>
                 <thead>
                   <tr>
@@ -315,19 +310,19 @@ export function AnswerPage() {
               <div className={styles.answerBanner}>
                 <Badge variant="primary">문서 근거 기반 답변</Badge>
                 <span className="muted" style={{ fontSize: "0.8rem" }}>
-                  모드 {MODE_LABEL[data.search_mode]} · {data.model ?? "—"} · dry_run {String(data.dry_run)}
+                  검색 방식 {getSearchModeLabel(data.search_mode)} · {data.model ?? "—"}
                 </span>
               </div>
               {insufficient && (
                 <div className={styles.insufficientBox}>
-                  근거가 충분하지 않아 답변이 제한되었을 수 있습니다. 아래 citations를 함께 확인하세요.
+                  근거가 충분하지 않아 답변이 제한되었을 수 있습니다. 아래 참고 문서를 함께 확인하세요.
                 </div>
               )}
               <p className={styles.answerBody}>{data.answer ?? data.message}</p>
             </SectionCard>
           )}
 
-          <SectionCard title="근거 (citations)">
+          <SectionCard title="참고 문서">
             {data.citations.length === 0 ? (
               <EmptyState title="근거 조각이 없습니다" description="검색 결과가 없거나 점수 컷에 걸렸을 수 있습니다." />
             ) : (
@@ -338,9 +333,9 @@ export function AnswerPage() {
                       <th>파일</th>
                       <th>경로</th>
                       <th>소스</th>
-                      <th>점수</th>
-                      <th>라인</th>
-                      <th>snippet</th>
+                      <th>관련도</th>
+                      <th>줄 범위</th>
+                      <th>발췌</th>
                       <th />
                     </tr>
                   </thead>

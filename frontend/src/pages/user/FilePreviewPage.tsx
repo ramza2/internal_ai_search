@@ -127,7 +127,8 @@ export function FilePreviewPage() {
 
       <SectionCard title="본문 미리보기">
         <p className="muted" style={{ marginTop: 0, marginBottom: "0.75rem", fontSize: "0.8rem" }}>
-          라인 {preview.start_line ?? "—"} – {preview.end_line ?? "—"} · chunk {preview.chunk_id ?? "—"}
+          줄 {preview.start_line ?? "—"} – {preview.end_line ?? "—"}
+          {preview.chunk_id ? ` · 검색 단위 ${preview.chunk_id}` : ""}
           {preview.is_truncated ? " · 일부만 표시" : ""}
         </p>
         <div className={styles.lineGrid}>

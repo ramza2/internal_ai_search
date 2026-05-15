@@ -41,7 +41,21 @@ class AdminJobChildItem(BaseModel):
     status: str
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    duration_ms: int | None = None
     progress_percent: float | None = None
+    error_message: str | None = None
+
+
+class AdminJobChildrenSummary(BaseModel):
+    total_steps: int = 0
+    completed_steps: int = 0
+    running_steps: int = 0
+    pending_steps: int = 0
+    failed_steps: int = 0
+    cancelled_steps: int = 0
+    partial_steps: int = 0
+    progress_percent: float = 0.0
+    current_step: str | None = None
 
 
 class AdminJobChildrenResponse(BaseModel):
@@ -49,10 +63,12 @@ class AdminJobChildrenResponse(BaseModel):
     parent_job_id: UUID
     items: list[AdminJobChildItem] = Field(default_factory=list)
     total: int = 0
+    summary: AdminJobChildrenSummary | None = None
 
 
 __all__ = [
     "AdminJobChildItem",
+    "AdminJobChildrenSummary",
     "AdminJobChildrenResponse",
     "AdminPipelineJobRequest",
     "AdminPipelineJobResponse",

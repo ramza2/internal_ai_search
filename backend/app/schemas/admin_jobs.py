@@ -44,6 +44,7 @@ class AdminJobItem(BaseModel):
     retry_count: int = 0
     max_retries: int = 1
     priority: int = 0
+    pipeline_current_step: str | None = None
 
 
 class AdminJobListResponse(BaseModel):

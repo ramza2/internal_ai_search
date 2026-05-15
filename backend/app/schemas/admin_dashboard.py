@@ -97,12 +97,32 @@ class DashboardProblemItems(BaseModel):
     pending_users_count: int = 0
 
 
+class RecentPipelineJobItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    data_source_name: str | None = None
+    status: str
+    progress_percent: float = 0.0
+    current_step: str | None = None
+    started_at: datetime | None = None
+
+
+class DashboardPipelinesSummary(BaseModel):
+    running: int = 0
+    pending: int = 0
+    failed_24h: int = 0
+    completed_24h: int = 0
+
+
 class DashboardSummaryResponse(BaseModel):
     status: str = "ok"
     summary: DashboardSummaryBlock
     recent_scan_jobs: list[RecentScanJobItem] = Field(default_factory=list)
     recent_actions: list[RecentActionItem] = Field(default_factory=list)
     problem_items: DashboardProblemItems
+    pipelines: DashboardPipelinesSummary = Field(default_factory=DashboardPipelinesSummary)
+    recent_pipeline_jobs: list[RecentPipelineJobItem] = Field(default_factory=list)
     message: str = "Dashboard summary retrieved successfully"
 
 
@@ -111,10 +131,12 @@ __all__ = [
     "DashboardChunksSummary",
     "DashboardDataSourcesSummary",
     "DashboardFilesSummary",
+    "DashboardPipelinesSummary",
     "DashboardProblemItems",
     "DashboardSummaryBlock",
     "DashboardSummaryResponse",
     "DashboardUsersSummary",
     "RecentActionItem",
+    "RecentPipelineJobItem",
     "RecentScanJobItem",
 ]

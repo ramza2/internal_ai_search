@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from uuid import UUID
 
 from psycopg.rows import dict_row
 
@@ -12,13 +13,17 @@ from app.schemas.admin_dashboard import (
     DashboardChunksSummary,
     DashboardDataSourcesSummary,
     DashboardFilesSummary,
+    DashboardPipelinesSummary,
     DashboardProblemItems,
     DashboardSummaryBlock,
     DashboardSummaryResponse,
     DashboardUsersSummary,
     RecentActionItem,
+    RecentPipelineJobItem,
     RecentScanJobItem,
 )
+from app.services.admin_jobs_service import batch_fetch_admin_children_rows_by_parent_ids
+from app.services.pipeline_progress import compute_pipeline_summary_dict, pipeline_steps_from_job_params
 from app.utils.file_type import humanize_bytes
 
 logger = logging.getLogger(__name__)
@@ -121,6 +126,36 @@ _SQL_RECENT_SCAN_JOBS = """
     LIMIT 5
 """
 
+_SQL_PIPELINES_COUNTS = """
+    SELECT
+        COUNT(*) FILTER (WHERE status::text IN ('RUNNING', 'CANCELLING'))::int AS running,
+        COUNT(*) FILTER (WHERE status::text = 'PENDING')::int AS pending,
+        COUNT(*) FILTER (
+            WHERE status::text = 'FAILED'
+              AND COALESCE(finished_at, updated_at) >= NOW() - INTERVAL '24 hours'
+        )::int AS failed_24h,
+        COUNT(*) FILTER (
+            WHERE status::text IN ('COMPLETED', 'PARTIAL')
+              AND COALESCE(finished_at, updated_at) >= NOW() - INTERVAL '24 hours'
+        )::int AS completed_24h
+    FROM scan_jobs
+    WHERE job_type::text = 'PIPELINE'
+"""
+
+_SQL_RECENT_PIPELINES = """
+    SELECT
+        sj.id,
+        ds.name AS data_source_name,
+        sj.status::text AS status,
+        sj.job_params,
+        sj.started_at
+    FROM scan_jobs sj
+    LEFT JOIN data_sources ds ON ds.id = sj.data_source_id
+    WHERE sj.job_type::text = 'PIPELINE'
+    ORDER BY sj.started_at DESC NULLS LAST, sj.created_at DESC NULLS LAST
+    LIMIT 8
+"""
+
 
 def _fetch_recent_scan_jobs(cur) -> list[RecentScanJobItem]:
     try:
@@ -169,6 +204,45 @@ def fetch_dashboard_summary() -> DashboardSummaryResponse:
 
                 recent_scan_jobs = _fetch_recent_scan_jobs(cur)
 
+                pipelines = DashboardPipelinesSummary()
+                recent_pipeline_jobs: list[RecentPipelineJobItem] = []
+                try:
+                    cur.execute(_SQL_PIPELINES_COUNTS)
+                    pc = cur.fetchone() or {}
+                    pipelines = DashboardPipelinesSummary.model_validate(dict(pc))
+                except Exception as exc:
+                    logger.warning("dashboard: pipeline counts unavailable (%s)", exc)
+
+                try:
+                    cur.execute(_SQL_RECENT_PIPELINES)
+                    prow_list = cur.fetchall() or []
+                    pids = [r["id"] for r in prow_list]
+                    id_list = [x if isinstance(x, UUID) else UUID(str(x)) for x in pids]
+                    cmap = batch_fetch_admin_children_rows_by_parent_ids(id_list)
+                    for r in prow_list:
+                        rid = r["id"]
+                        ru = rid if isinstance(rid, UUID) else UUID(str(rid))
+                        steps = pipeline_steps_from_job_params(r.get("job_params"))
+                        pct = 0.0
+                        cur_step: str | None = None
+                        if steps:
+                            kids = cmap.get(ru) or []
+                            sd = compute_pipeline_summary_dict(steps=steps, children_rows=[dict(x) for x in kids])
+                            pct = float(sd.get("progress_percent") or 0.0)
+                            cur_step = sd.get("current_step")
+                        recent_pipeline_jobs.append(
+                            RecentPipelineJobItem(
+                                id=ru,
+                                data_source_name=r.get("data_source_name"),
+                                status=str(r.get("status") or ""),
+                                progress_percent=pct,
+                                current_step=cur_step,
+                                started_at=r.get("started_at"),
+                            )
+                        )
+                except Exception as exc:
+                    logger.warning("dashboard: recent pipelines unavailable (%s)", exc)
+
         problem = DashboardProblemItems(
             failed_files_count=files.failed,
             pending_files_count=files.pending,
@@ -189,6 +263,8 @@ def fetch_dashboard_summary() -> DashboardSummaryResponse:
             recent_scan_jobs=recent_scan_jobs,
             recent_actions=recent_actions,
             problem_items=problem,
+            pipelines=pipelines,
+            recent_pipeline_jobs=recent_pipeline_jobs,
         )
     except Exception as exc:
         raise DashboardSummaryError(str(exc)) from exc
