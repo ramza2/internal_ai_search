@@ -251,6 +251,8 @@ If the embedding model is missing or Ollama is down, `GET /health/embedding` ret
 
 ## 4) Run API
 
+**Quick reference (API + worker + frontend commands):** [`docs/로컬_실행_명령.md`](../docs/로컬_실행_명령.md)
+
 Working directory must be `backend` (so `app` package resolves):
 
 ```bash
@@ -619,6 +621,44 @@ Linux-friendly **document parser adapters** live under `app/parsers/`. Each pars
 - **Failure mapping:** converter missing → `HWP_CONVERTER_NOT_AVAILABLE` (surfaced as parse failure); timeout → `HWP_CONVERSION_TIMEOUT`; other CLI errors → `HWP_CONVERSION_FAILED` or `PARSING_FAILED`; password hints in stderr → `PASSWORD_PROTECTED`.
 - **Citation:** same as other documents — `file_contents.extracted_text` → chunking computes **`start_line` / `end_line`** on normalized text. UI/help text: **converted TXT line range**, not original HWP page numbers.
 - **PoC (WSL2/Linux):** sample01/03 본문형 문서 추출 OK; sample02 low-text 양식 → `NO_EXTRACTABLE_TEXT` policy validated. See `docs/07_아키텍처/hwp_poc_실행계획.md`.
+
+#### HWP 운영 점검 (runtime · E2E)
+
+**변환기:** `HwpParser`는 **`hwp5txt` CLI**가 반드시 필요하다. backend는 pyhwp Python API를 직접 import하지 않고 subprocess만 호출한다.
+
+**필요 Python 패키지 (pip, `requirements.txt` 참고):**
+
+| 패키지 | 용도 |
+|--------|------|
+| `pyhwp` | `hwp5txt` 엔트리포인트 제공 |
+| `six` | PoC/일부 환경에서 pyhwp 실행 시 누락 사례 있음 — 명시 설치 |
+| `lxml` | pyhwp 의존 |
+| `olefile` | pyhwp 의존 |
+| `cryptography` | pyhwp 의존 (프로젝트에도 기존 사용) |
+
+**라이선스:** **pyhwp는 AGPLv3+** 로 알려져 있다. **법무 검토가 끝난 것이 아니다.** 운영·Docker·SaaS 반영 전 별도 승인을 받는다.
+
+**환경 변수 (`backend/.env`):**
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `HWP5TXT_BIN` | `hwp5txt` | CLI 경로 또는 명령명 |
+| `HWP_PARSER_TIMEOUT_SECONDS` | `120` | 파일 1건 변환 timeout(초) |
+| `HWP_MIN_EXTRACTED_TEXT_LENGTH` | `50` | strip 후 의미 길이 미만 → `NO_EXTRACTABLE_TEXT` |
+
+**Runtime 점검 (샘플 HWP 없음, backend import 없음):**
+
+```bash
+# 저장소 루트
+python tools/hwp_poc/check_hwp_runtime.py
+python tools/hwp_poc/check_hwp_runtime.py --json
+```
+
+`status: ok` — `hwp5txt` 발견, `--help` 성공, 위 import 전부 통과. 실패 시 `missing_imports` / `hwp5txt_help_error` 확인.
+
+**E2E 검증 (서비스 파이프라인):** 단위 테스트만으로는 부족하다. `sync-tree` → `process-pending-documents` → `chunk-completed-text` → `embed-pending-chunks` → `search` / `answer` → `file preview` 순서는 **`docs/07_아키텍처/hwp_e2e_검증계획.md`** 를 따른다. 샘플 `.hwp`·추출 TXT는 **Git 커밋 금지** (`tmp/hwp_poc/`).
+
+**Docker / 운영 이미지:** 본 README 절차로 로컬·WSL에서 runtime을 통과한 뒤, **별도 PR**로 이미지에 `pyhwp`·`hwp5txt`·시스템 라이브러리를 넣는다. **AGPL·Python 버전(3.11/3.12 권장)·의존성 pin**은 이미지 반영 전에 정리한다.
 
 **Typical indexing pipeline after documents:**
 

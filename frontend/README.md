@@ -84,6 +84,8 @@ Figma 톤에 맞춘 **관리자·파이프라인 화면** 정리입니다. API·
 
 ## 설치·실행
 
+**실행 명령만 모아 둔 문서:** [`docs/로컬_실행_명령.md`](../docs/로컬_실행_명령.md) (API · worker · `npm run dev` / `build`)
+
 ```bash
 cd frontend
 npm install

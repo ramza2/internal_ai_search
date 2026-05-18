@@ -123,7 +123,9 @@ class HwpParser(DocumentParser):
                 parser_version=self._version,
                 metadata=meta,
                 error_code=ERR_CONVERTER_NOT_AVAILABLE,
-                error_message="hwp5txt converter not available on PATH",
+                error_message=(
+                    "hwp5txt converter not available; set HWP5TXT_BIN or install pyhwp (hwp5txt on PATH)"
+                ),
             )
 
         parser_version = _converter_version(bin_path)
@@ -165,7 +167,7 @@ class HwpParser(DocumentParser):
                 parser_version=parser_version,
                 metadata=meta,
                 error_code=ERR_CONVERSION_FAILED,
-                error_message=f"HWP conversion failed: {type(exc).__name__}",
+                error_message=f"HWP conversion failed ({type(exc).__name__}); check HWP5TXT_BIN and runtime deps",
             )
 
         stderr_summary = _truncate_stderr(proc.stderr)
