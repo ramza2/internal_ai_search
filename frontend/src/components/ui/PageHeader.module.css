@@ -16,4 +16,6 @@
   color: var(--color-text-muted);
   max-width: 52rem;
   line-height: 1.55;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }

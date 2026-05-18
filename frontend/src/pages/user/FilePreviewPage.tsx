@@ -4,7 +4,7 @@ import { getApiErrorMessage } from "@/api/httpClient";
 import * as fileApi from "@/api/fileApi";
 import { ErrorMessage } from "@/components/ErrorMessage";
 import { Loading } from "@/components/Loading";
-import { Badge, PageHeader, SectionCard } from "@/components/ui";
+import { Badge, Button, PageHeader, SectionCard } from "@/components/ui";
 import type { FilePreviewResponse } from "@/types/file";
 import { formatDateTime } from "@/utils/format";
 import styles from "./FilePreviewPage.module.css";
@@ -27,6 +27,7 @@ export function FilePreviewPage() {
   const [data, setData] = useState<FilePreviewResponse | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [urlCopied, setUrlCopied] = useState(false);
 
   useEffect(() => {
     if (!fileId) return;
@@ -120,9 +121,36 @@ export function FilePreviewPage() {
             <p className={styles.metaValue}>{formatDateTime(file.last_indexed_at)}</p>
           </div>
         </div>
-        <p className="muted" style={{ marginTop: "0.75rem", fontSize: "0.8rem" }}>
-          <strong>WebDAV URL</strong> {file.open_info.webdav_url}
-        </p>
+        <div className={styles.urlSection}>
+          <span className={styles.metaLabel}>WebDAV 위치</span>
+          {(file.remote_path || file.open_info.remote_path) && (
+            <p className={styles.remotePath}>{file.remote_path ?? file.open_info.remote_path}</p>
+          )}
+          <div className={styles.urlRow}>
+            <code className={styles.urlCode} title={file.open_info.webdav_url}>
+              {file.open_info.webdav_url}
+            </code>
+            <div className={styles.urlActions}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(file.open_info.webdav_url);
+                    setUrlCopied(true);
+                    window.setTimeout(() => setUrlCopied(false), 2000);
+                  } catch {
+                    setUrlCopied(false);
+                  }
+                }}
+              >
+                URL 복사
+              </Button>
+              {urlCopied && <span className={styles.copyHint}>복사됨</span>}
+            </div>
+          </div>
+        </div>
       </SectionCard>
 
       <SectionCard title="본문 미리보기">
