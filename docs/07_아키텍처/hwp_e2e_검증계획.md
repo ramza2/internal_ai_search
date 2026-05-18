@@ -341,10 +341,35 @@ curl -sS "{BASE}/api/files/{FILE_ID}/chunks/{CHUNK_ID}/preview?context_lines=5" 
 | 항목 | 경로 |
 |------|------|
 | Runtime 점검 | `python tools/hwp_poc/check_hwp_runtime.py` |
+| **API E2E 보조 스크립트** | `python tools/hwp_poc/hwp_e2e_api_check.py` — documents dry_run/실행, chunk, embedding, search, preview 일부 자동화. **운영 코드 아님.** 토큰·추출 **본문 전문 출력 금지.** DB 변경 단계는 `--run-documents` 등 **명시 플래그** 필요. |
+| **결과 기록 템플릿** | [`hwp_e2e_검증결과_템플릿.md`](./hwp_e2e_검증결과_템플릿.md) — 단계별 성공/카운트·SQL·Go/No-Go 정리 |
 | PoC 실행 | [`hwp_poc_실행계획.md`](./hwp_poc_실행계획.md) |
 | 설계·정책 | [`hwp_처리방식_검토.md`](./hwp_처리방식_검토.md) |
 | Backend 운영 | `backend/README.md` — HWP 운영 점검 |
+| 로컬 실행 명령 | [`../로컬_실행_명령.md`](../로컬_실행_명령.md) |
 | Docker 반영 | **본 마일스톤 범위 외** — E2E Go 이후 별도 PR |
+
+### 8.1 API 보조 스크립트 예시
+
+```bash
+# 사전: uvicorn + (선택) worker, WebDAV에 샘플 HWP 업로드 후 sync-tree
+
+export INTERNAL_AI_SEARCH_TOKEN="<admin-jwt>"
+
+python tools/hwp_poc/check_hwp_runtime.py --json
+
+python tools/hwp_poc/hwp_e2e_api_check.py \
+  --data-source-id <DS_ID> \
+  --dry-run-documents
+
+python tools/hwp_poc/hwp_e2e_api_check.py \
+  --data-source-id <DS_ID> \
+  --run-documents --run-chunk --run-embedding \
+  --keyword "<HWP 본문 키워드>" \
+  --include-preview
+```
+
+`sync-tree`·`answer`·DB SQL은 UI/curl/템플릿에 수동 기록한다.
 
 ---
 

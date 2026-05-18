@@ -658,6 +658,30 @@ python tools/hwp_poc/check_hwp_runtime.py --json
 
 **E2E 검증 (서비스 파이프라인):** 단위 테스트만으로는 부족하다. `sync-tree` → `process-pending-documents` → `chunk-completed-text` → `embed-pending-chunks` → `search` / `answer` → `file preview` 순서는 **`docs/07_아키텍처/hwp_e2e_검증계획.md`** 를 따른다. 샘플 `.hwp`·추출 TXT는 **Git 커밋 금지** (`tmp/hwp_poc/`).
 
+**HWP E2E 보조 스크립트** (저장소 루트, 운영 코드 아님 — 토큰·본문 전문 미출력):
+
+```bash
+python tools/hwp_poc/check_hwp_runtime.py --json
+
+export INTERNAL_AI_SEARCH_TOKEN="<admin-jwt>"
+
+python tools/hwp_poc/hwp_e2e_api_check.py \
+  --base-url http://localhost:8000 \
+  --data-source-id <DS_ID> \
+  --dry-run-documents
+
+python tools/hwp_poc/hwp_e2e_api_check.py \
+  --base-url http://localhost:8000 \
+  --data-source-id <DS_ID> \
+  --run-documents \
+  --run-chunk \
+  --run-embedding \
+  --keyword "<HWP 본문 키워드>" \
+  --include-preview
+```
+
+결과 기록: **`docs/07_아키텍처/hwp_e2e_검증결과_템플릿.md`**. DB 변경 단계는 `--run-documents` 등 플래그를 명시해야 실행된다.
+
 **Docker / 운영 이미지:** 본 README 절차로 로컬·WSL에서 runtime을 통과한 뒤, **별도 PR**로 이미지에 `pyhwp`·`hwp5txt`·시스템 라이브러리를 넣는다. **AGPL·Python 버전(3.11/3.12 권장)·의존성 pin**은 이미지 반영 전에 정리한다.
 
 **Typical indexing pipeline after documents:**
