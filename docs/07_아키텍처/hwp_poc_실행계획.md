@@ -4,6 +4,12 @@
 > **범위:** Linux/headless에서 **HWP 바이너리(`.hwp`) → TXT** 추출 가능 여부를 **독립 PoC**로 검증한다.  
 > **본 단계:** 실행 계획 문서 + 실험용 스크립트 초안만 제공한다. **운영 코드·DB·API·frontend 변경 없음.**
 
+### Windows 개발 PC에서 실행할 때
+
+- **PowerShell/CMD에서 직접 PoC를 돌리기보다 WSL2 Ubuntu 등 Linux 환경에서 실행하는 것을 권장**한다. (최종 배포가 Linux/headless이므로 동일 OS에서 검증)
+- 상세 절차: [`hwp_poc_windows_wsl_가이드.md`](./hwp_poc_windows_wsl_가이드.md)
+- **Git:** 루트 `.gitignore`에 `tmp/hwp_poc/`, `.venv-hwp-poc/` 가 포함되어 있어 샘플 HWP·변환 TXT·PoC venv가 커밋되지 않도록 한다. 샘플·출력은 **민감 문서**일 수 있으므로 **절대 커밋하지 않는다.**
+
 ---
 
 ## 1. PoC 목적
@@ -90,7 +96,8 @@ PoC 전용 **가상환경**을 만들어 `pip install pyhwp` 한다. **프로젝
 **Git 정책:**
 
 - 샘플 HWP·출력 TXT는 **저장소에 커밋하지 않는다** (원문·추출 본문 유출 방지).
-- 루트 `.gitignore`에 `tmp/`가 **없을 수 있음** — 이번 단계에서는 `.gitignore`를 **수정하지 않는다**. 실행자는 로컬에서만 보관하고, 필요 시 **다음 단계**에서 `tmp/hwp_poc/` ignore 규칙을 추가한다.
+- 루트 `.gitignore`에 **`tmp/hwp_poc/`**, **`.venv-hwp-poc/`** 가 등록되어 있어야 한다. (민감 문서가 포함될 수 있음.)
+- Windows에서 WSL2로 PoC할 때도 동일 경로(`tmp/hwp_poc/`)를 쓰면 ignore가 적용된다.
 
 ---
 
@@ -149,11 +156,32 @@ PoC 전용 **가상환경**을 만들어 `pip install pyhwp` 한다. **프로젝
 
 | 항목 | 값 |
 |------|-----|
-| OS (`/etc/os-release`) | *(실행자 기입)* |
-| Python (`python --version`) | *(실행자 기입)* |
-| pyhwp 버전 (`pip show pyhwp`) | *(실행자 기입)* |
-| hwp5txt 경로 (`which hwp5txt`) | *(실행자 기입)* |
-| PoC 일시 | *(실행자 기입)* |
+| OS (`/etc/os-release`) | PRETTY_NAME="Ubuntu 26.04 LTS"
+NAME="Ubuntu"
+VERSION_ID="26.04"
+VERSION="26.04 (Resolute Raccoon)"
+VERSION_CODENAME=resolute
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=resolute
+LOGO=ubuntu-logo |
+| Python (`python --version`) | Python 3.14.4 |
+| pyhwp 버전 (`pip show pyhwp`) | Name: pyhwp
+Version: 0.1b15
+Summary: hwp file format parser
+Home-page: https://github.com/mete0r/pyhwp
+Author: mete0r
+Author-email: mete0r@sarangbang.or.kr
+License: GNU Affero General Public License v3 or later (AGPLv3+)
+Location: /home/chjeon/.venv-hwp-poc/lib/python3.14/site-packages
+Requires: cryptography, lxml, olefile
+Required-by: |
+| hwp5txt 경로 (`which hwp5txt`) | /home/chjeon/.venv-hwp-poc/bin/hwp5txt |
+| PoC 일시 | 2026-05-15 17:48 |
 
 ### 7.2 파일별 결과 (실행 후)
 
@@ -194,7 +222,8 @@ PoC 전용 **가상환경**을 만들어 `pip install pyhwp` 한다. **프로젝
 
 ## 9. 실행 예시
 
-**PoC 전용 venv** 또는 임시 환경에서만 수행한다.
+**PoC 전용 venv** 또는 임시 환경에서만 수행한다.  
+**Windows 개발 PC**에서는 [`hwp_poc_windows_wsl_가이드.md`](./hwp_poc_windows_wsl_가이드.md)의 WSL2 절차를 따른다.
 
 ```bash
 # 저장소 루트에서
@@ -306,10 +335,28 @@ python tools/hwp_poc/hwp5txt_poc.py \
 | 항목 | 상태 |
 |------|------|
 | PoC 실행 계획 문서 | `docs/07_아키텍처/hwp_poc_실행계획.md` |
+| Windows/WSL2 가이드 | `docs/07_아키텍처/hwp_poc_windows_wsl_가이드.md` |
 | PoC 스크립트 초안 | `tools/hwp_poc/hwp5txt_poc.py` |
+| Git ignore | 루트 `.gitignore`: `tmp/hwp_poc/`, `.venv-hwp-poc/` |
 | 운영 코드 영향 | **없음** |
-| 실제 PoC 실행 | **실행자가 샘플 준비 후 수행** (본 문서 §9) |
+| 실제 PoC 실행 | **실행자가 샘플 준비 후 WSL2에서 수행** (§9, WSL 가이드) |
 
 ---
 
-*문서 버전: 2026-05-15 · internal-ai-search HWP PoC 준비*
+---
+
+## 14. PoC 2차 실행 결과 (sample01–03)
+
+| 파일 | HWP | TXT | 줄 수 | 안정성 | 비고 |
+|------|-----|-----|------:|:---:|:---|
+| sample01.hwp | ~9.2MB | ~13KB | 289 | ✓ | 본문형, RAG 적합 |
+| sample02.hwp | ~90KB | ~206B | 24 | ✓ | 별첨/표 양식, low-text |
+| sample03.hwp | ~1.5MB | ~64KB | 1114 | ✓ | 장문 제안요청서 |
+
+- 의존성: `pyhwp` + **`six`**, `lxml`, `olefile`, `cryptography` (명시 설치)
+- **최종 판정: Go** → `backend/app/parsers/hwp_parser.py` 구현
+- **조건:** AGPL 법무 검토, 운영 Python 3.11/3.12, `HWP_MIN_EXTRACTED_TEXT_LENGTH=50`
+
+---
+
+*문서 버전: 2026-05-15 · internal-ai-search HWP PoC*

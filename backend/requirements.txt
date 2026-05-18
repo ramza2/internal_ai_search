@@ -10,3 +10,8 @@ pypdf
 python-docx
 openpyxl
 python-pptx
+# HWP binary (.hwp) via hwp5txt — AGPLv3+; legal review before production (see backend/README)
+pyhwp
+six
+lxml
+olefile

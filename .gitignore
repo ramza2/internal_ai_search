@@ -1,1 +1,7 @@
 /.idea/
+
+# HWP PoC: local sample .hwp files and extracted text outputs (may contain sensitive content)
+tmp/hwp_poc/
+
+# HWP PoC-only virtualenv (pyhwp / hwp5txt — not part of production deps)
+.venv-hwp-poc/

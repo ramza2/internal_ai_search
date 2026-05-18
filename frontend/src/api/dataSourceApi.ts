@@ -128,7 +128,7 @@ function buildDocumentProcessParams(p: DocumentProcessRequestParams): Record<str
   return out;
 }
 
-/** Admin: extract PDF/DOCX/XLSX/PPTX/HWPX text into `file_contents`. */
+/** Admin: extract PDF/DOCX/XLSX/PPTX/HWPX/HWP text into `file_contents`. */
 export async function processPendingDocuments(
   dataSourceId: string,
   params: DocumentProcessRequestParams

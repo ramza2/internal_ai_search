@@ -30,7 +30,7 @@ const MB_OPTIONS: { label: string; bytes: number }[] = [
   { label: "100 MB", bytes: 100 * 1024 * 1024 },
 ];
 
-const DOC_EXT_KEYS = ["pdf", "docx", "xlsx", "pptx", "hwpx"] as const;
+const DOC_EXT_KEYS = ["pdf", "docx", "xlsx", "pptx", "hwpx", "hwp"] as const;
 type DocExtKey = (typeof DOC_EXT_KEYS)[number];
 
 const EXT_LABELS: Record<DocExtKey, string> = {
@@ -39,6 +39,7 @@ const EXT_LABELS: Record<DocExtKey, string> = {
   xlsx: "XLSX",
   pptx: "PPTX",
   hwpx: "HWPX",
+  hwp: "HWP",
 };
 
 function itemStatusVariant(status: string | undefined): BadgeVariant {
@@ -258,13 +259,14 @@ export function DocumentProcessingPanel({
   return (
     <>
       <p className="muted" style={{ marginTop: 0 }}>
-        <strong>{dataSourceName}</strong> — PDF, DOCX, XLSX, PPTX, HWPX 문서를 추출하여 검색/RAG 파이프라인에 연결합니다.
+        <strong>{dataSourceName}</strong> — PDF, DOCX, XLSX, PPTX, HWPX, HWP 문서를 추출하여 검색/RAG 파이프라인에 연결합니다.
       </p>
       {showIntroBullets && (
         <ul className="muted" style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem", fontSize: "0.875rem" }}>
           <li>HWP Automation / COM은 사용하지 않습니다.</li>
           <li>HWPX는 ZIP/XML 기반으로 처리합니다.</li>
-          <li>HWP, DOC, XLS, PPT는 아직 미지원입니다.</li>
+          <li>HWP 바이너리는 Linux/headless에서 hwp5txt로 변환하며, 근거는 원본 페이지가 아니라 변환 텍스트의 줄 번호입니다.</li>
+          <li>DOC, XLS, PPT 구형 포맷은 아직 미지원입니다.</li>
           <li>처리 후에는 Chunk 생성과 Embedding 생성이 별도로 필요합니다.</li>
         </ul>
       )}

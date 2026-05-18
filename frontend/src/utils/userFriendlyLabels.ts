@@ -50,7 +50,7 @@ export const PIPELINE_MODAL_STEP_LABELS: Record<string, string> = {
 export const PIPELINE_STEP_DESCRIPTIONS: Record<string, string> = {
   sync: "저장소의 폴더와 파일 목록을 읽어 DB에 저장합니다.",
   text: "txt, md, 소스코드, 설정 파일 등의 내용을 읽어 검색 가능한 텍스트로 저장합니다.",
-  doc: "PDF, DOCX, XLSX, PPTX, HWPX 문서에서 텍스트를 추출합니다. HWP, DOC, XLS, PPT는 아직 지원하지 않습니다.",
+  doc: "PDF, DOCX, XLSX, PPTX, HWPX, HWP 문서에서 텍스트를 추출합니다. HWP는 변환 텍스트 기준 줄 번호로 근거를 표시합니다. DOC, XLS, PPT는 아직 지원하지 않습니다.",
   chunk: "긴 문서를 검색하기 좋은 작은 단위로 나눕니다.",
   embed: "AI 검색이 가능하도록 문서 조각을 벡터 인덱스로 변환합니다.",
 };

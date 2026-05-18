@@ -245,12 +245,16 @@ def _find_hwp_files(input_dir: Path) -> list[Path]:
     return unique
 
 
-def _print_summary(summaries: list[FileSummary], report_path: Path) -> None:
+def _print_summary(
+    summaries: list[FileSummary], report_path: Path, output_dir: Path
+) -> None:
     total = len(summaries)
     ok_files = sum(1 for s in summaries if any(r.conversion_success for r in s.runs))
     stable = sum(1 for s in summaries if s.stable_output_hash is True)
+    report_abs = report_path.resolve()
     print(f"HWP PoC finished: files={total} with_success={ok_files} stable_hash_pairs={stable}")
-    print(f"Report: {report_path}")
+    print(f"Report (JSONL): {report_abs}")
+    print(f"TXT outputs: {output_dir.resolve()}")
     for s in summaries:
         last = s.runs[-1] if s.runs else None
         status = "OK" if last and last.conversion_success else "FAIL"
@@ -307,7 +311,9 @@ def main(argv: list[str] | None = None) -> int:
             "error: hwp5txt not found on PATH.\n"
             "  Install in a PoC-only venv: pip install pyhwp\n"
             "  Then verify: hwp5txt --help\n"
-            f"  Or pass --hwp5txt-bin /path/to/hwp5txt",
+            f"  Or pass --hwp5txt-bin /path/to/hwp5txt\n"
+            "  Windows dev PC: run PoC inside WSL2 (see "
+            "docs/07_아키텍처/hwp_poc_windows_wsl_가이드.md)",
             file=sys.stderr,
         )
         return 1
@@ -360,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
             }
             report_fp.write(json.dumps(summary_row, ensure_ascii=False) + "\n")
 
-    _print_summary(summaries, report_path)
+    _print_summary(summaries, report_path, output_dir)
     return 0
 
 

@@ -471,6 +471,25 @@ def _process_one_file(
                     parser_name=_parser_label(parser),
                 ),
             }
+        if code == _ERR_NO_EXTRACTABLE_TEXT:
+            _commit_skip(
+                conn,
+                ds_id=ds_id,
+                scan_job_id=scan_job_id,
+                file_id=file_id,
+                remote_path=remote_path,
+                error_code=_ERR_NO_EXTRACTABLE_TEXT,
+                error_message=_MSG_NO_EXTRACTABLE_TEXT,
+            )
+            return {
+                "kind": "skipped",
+                "item": _make_item(
+                    row,
+                    status="SKIPPED",
+                    reason=_ERR_NO_EXTRACTABLE_TEXT,
+                    parser_name=parsed.parser_name or _parser_label(parser),
+                ),
+            }
         _commit_failed(
             conn,
             ds_id=ds_id,

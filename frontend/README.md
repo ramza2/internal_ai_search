@@ -155,9 +155,9 @@ npm run preview
 ## 문서 파일 처리 UI (파이프라인 모달 Step 3)
 
 - **데이터 소스** 목록에서는 **파이프라인 실행** 모달만 엽니다. 문서 추출 UI는 모달 **3. 문서 파일 처리** 단계에서 `DocumentProcessingPanel`을 그대로 사용합니다(`POST /api/data-sources/{id}/process-pending-documents`).
-- **지원 포맷:** PDF, DOCX, XLSX, PPTX, HWPX.
-- **미지원:** HWP, DOC, XLS, PPT.
-- **HWP Automation/COM 미사용**, HWPX는 ZIP/XML 기반(백엔드와 동일 정책). OCR 없음.
+- **지원 포맷:** PDF, DOCX, XLSX, PPTX, HWPX, **HWP (바이너리, hwp5txt)**.
+- **미지원:** DOC, XLS, PPT (구형 OLE).
+- **HWP Automation/COM 미사용.** HWPX는 ZIP/XML, HWP는 Linux/headless `hwp5txt` 변환. 검색 근거는 **변환 텍스트 기준 줄 번호**(원본 HWP 페이지 아님). 서버에 pyhwp/hwp5txt 설치 및 **AGPL 법무 검토** 필요. OCR 없음.
 - **dry_run:** 「대상 확인」으로 `dry_run=true` 호출 — 다운로드·DB 반영 없이 대상만 확인.
 - **reprocess_skipped:** 기존 `UNSUPPORTED_EXTENSION`으로 스킵된 지원 확장자 파일을 다시 처리할 때 사용.
 - **백그라운드 실행** 모드에서는 동기 「문서 처리 실행」 버튼을 숨기고, 같은 폼으로 **문서 처리 Job 생성**(`POST /api/admin/jobs/process-pending-documents`)만 제공합니다. 실제 추출 후 검색/RAG에는 **Chunk 생성**과 **Embedding**이 필요합니다.
@@ -190,7 +190,7 @@ npm run preview
 curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-documents?limit=20&include_extensions=pdf,docx,hwpx" \
   -H "Authorization: Bearer <admin-token>"
 
-curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-documents?reprocess_skipped=true&include_extensions=pdf,docx,xlsx,pptx,hwpx" \
+curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-documents?reprocess_skipped=true&include_extensions=pdf,docx,xlsx,pptx,hwpx,hwp" \
   -H "Authorization: Bearer <admin-token>"
 
 curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-documents?dry_run=true" \

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.parsers.base import DocumentParser
 from app.parsers.docx_parser import DocxParser
+from app.parsers.hwp_parser import HwpParser
 from app.parsers.hwpx_parser import HwpxParser
 from app.parsers.pdf_parser import PdfParser
 from app.parsers.plain_text_parser import PlainTextParser
@@ -13,7 +14,7 @@ from app.parsers.xlsx_parser import XlsxParser
 from app.services.text_extraction_service import normalize_extension
 
 _DOCUMENT_EXTENSIONS: frozenset[str] = frozenset(
-    {"pdf", "docx", "xlsx", "pptx", "hwpx"}
+    {"pdf", "docx", "xlsx", "pptx", "hwpx", "hwp"}
 )
 
 _ORDERED: tuple[DocumentParser, ...] = (
@@ -21,6 +22,7 @@ _ORDERED: tuple[DocumentParser, ...] = (
     DocxParser(),
     XlsxParser(),
     PptxParser(),
+    HwpParser(),
     HwpxParser(),
     PlainTextParser(),
 )

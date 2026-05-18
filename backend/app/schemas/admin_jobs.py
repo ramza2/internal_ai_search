@@ -159,7 +159,7 @@ class AdminProcessPendingTextJobResponse(BaseModel):
     message: str = "Process-pending-text job queued successfully"
 
 
-PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS = "pdf,docx,xlsx,pptx,hwpx"
+PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS = "pdf,docx,xlsx,pptx,hwpx,hwp"
 
 
 class AdminProcessPendingDocumentsJobRequest(BaseModel):

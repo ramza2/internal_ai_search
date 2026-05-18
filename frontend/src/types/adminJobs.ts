@@ -137,7 +137,7 @@ export type AdminProcessPendingTextJobResponse = {
   message: string;
 };
 
-export const PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS = "pdf,docx,xlsx,pptx,hwpx";
+export const PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS = "pdf,docx,xlsx,pptx,hwpx,hwp";
 
 export type AdminProcessPendingDocumentsJobRequest = {
   data_source_id: string;

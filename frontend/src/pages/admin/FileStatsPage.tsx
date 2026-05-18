@@ -133,12 +133,12 @@ export function FileStatsPage() {
 
       <SectionCard title="문서 처리·스킵 안내">
         <p className="muted" style={{ marginTop: 0 }}>
-          PDF, DOCX, XLSX, PPTX, HWPX 파일이 <code>SKIPPED</code> / <code>UNSUPPORTED_EXTENSION</code> 등으로 남아 있다면,{" "}
+          PDF, DOCX, XLSX, PPTX, HWPX, HWP 파일이 <code>SKIPPED</code> / <code>UNSUPPORTED_EXTENSION</code> 등으로 남아 있다면,{" "}
           <Link to="/admin/data-sources">데이터 소스</Link> 화면에서 해당 소스의 <strong>문서 처리</strong>를 실행해 텍스트를 추출한 뒤 Chunk·Embedding 단계를
           거치면 검색·RAG 대상으로 전환할 수 있습니다.
         </p>
         <p className="muted" style={{ marginBottom: 0 }}>
-          HWP, DOC, XLS, PPT는 아직 미지원입니다. HWP Automation/COM은 사용하지 않습니다.
+          DOC, XLS, PPT 구형 포맷은 아직 미지원입니다. HWP는 hwp5txt 기반이며 Automation/COM은 사용하지 않습니다.
         </p>
         {skippedCount > 0 && (
           <p style={{ marginTop: "0.65rem", fontSize: "0.875rem" }}>

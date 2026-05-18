@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     worker_stale_timeout_minutes: int = 30
     worker_max_jobs_per_loop: int = 1
 
+    # --- HWP binary parser (hwp5txt subprocess; AGPL — see README) ------------
+    hwp5txt_bin: str = "hwp5txt"
+    hwp_parser_timeout_seconds: int = 120
+    hwp_min_extracted_text_length: int = 50
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

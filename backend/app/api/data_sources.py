@@ -500,8 +500,9 @@ def process_data_source_pending_documents(
 ) -> JSONResponse:
     """Download PENDING (or SKIPPED/UNSUPPORTED) document files into ``file_contents``.
 
-    Uses the parser registry (PDF, DOCX, XLSX, PPTX, HWPX). No OCR, no HWP
-    binary/COM. Each file uses a short DB transaction; credentials are never
+    Uses the parser registry (PDF, DOCX, XLSX, PPTX, HWPX, HWP binary via
+    hwp5txt). No OCR, no HWP Automation/COM. Each file uses a short DB
+    transaction; credentials are never
     logged or echoed in error payloads.
     """
     try:
