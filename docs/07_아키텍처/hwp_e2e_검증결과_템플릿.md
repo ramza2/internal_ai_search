@@ -198,7 +198,7 @@ SQL 실행 결과 요약만 붙여넣기 (**extracted_text 전문 금지**).
 
 | 항목 | 담당 | 상태 |
 |------|------|------|
-| Docker / 운영 이미지에 hwp5txt 반영 | | ☐ |
+| Docker / 운영 이미지에 hwp5txt 반영 ([계획](./hwp_운영이미지_반영계획.md)) | | ☐ |
 | requirements / Python 3.11·3.12 pin | | ☐ |
 | AGPL 법무 검토 | | ☐ |
 | UI 기본값·안내 (PipelineRunModal 등) | | ☐ |

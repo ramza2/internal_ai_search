@@ -11,6 +11,7 @@ python-docx
 openpyxl
 python-pptx
 # HWP binary (.hwp) via hwp5txt — AGPLv3+; legal review before production (see backend/README)
+# TODO: pin after staging/Docker validation on Python 3.11/3.12 — pip freeze | grep -E "pyhwp|six|lxml|olefile|cryptography"
 pyhwp
 six
 lxml

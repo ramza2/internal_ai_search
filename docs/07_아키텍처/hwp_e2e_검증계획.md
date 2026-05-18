@@ -347,7 +347,7 @@ curl -sS "{BASE}/api/files/{FILE_ID}/chunks/{CHUNK_ID}/preview?context_lines=5" 
 | 설계·정책 | [`hwp_처리방식_검토.md`](./hwp_처리방식_검토.md) |
 | Backend 운영 | `backend/README.md` — HWP 운영 점검 |
 | 로컬 실행 명령 | [`../로컬_실행_명령.md`](../로컬_실행_명령.md) |
-| Docker 반영 | **본 마일스톤 범위 외** — E2E Go 이후 별도 PR |
+| **Docker / 운영 이미지** | [`hwp_운영이미지_반영계획.md`](./hwp_운영이미지_반영계획.md) — 의존성·빌드 후 `check_hwp_runtime`·AGPL 주의 (법무 미완) |
 
 ### 8.1 API 보조 스크립트 예시
 

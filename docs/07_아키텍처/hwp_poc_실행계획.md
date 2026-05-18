@@ -222,7 +222,7 @@ Required-by: |
 
 - **HWP parser 1차 구현 완료:** `backend/app/parsers/hwp_parser.py`, registry·기본 확장자·`test_hwp_parser.py` (6 tests).
 - **다음 검증:** 서비스 E2E는 [`hwp_e2e_검증계획.md`](./hwp_e2e_검증계획.md) — runtime은 `python tools/hwp_poc/check_hwp_runtime.py`.
-- **미완:** AGPL 법무 검토, Docker 이미지 hwp5txt 설치 검증, 의존성 버전 pin.
+- **미완:** AGPL 법무 검토, Docker 이미지 hwp5txt 설치 검증, 의존성 버전 pin → [`hwp_운영이미지_반영계획.md`](./hwp_운영이미지_반영계획.md).
 
 ---
 

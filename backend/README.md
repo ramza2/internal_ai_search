@@ -682,7 +682,26 @@ python tools/hwp_poc/hwp_e2e_api_check.py \
 
 결과 기록: **`docs/07_아키텍처/hwp_e2e_검증결과_템플릿.md`**. DB 변경 단계는 `--run-documents` 등 플래그를 명시해야 실행된다.
 
-**Docker / 운영 이미지:** 본 README 절차로 로컬·WSL에서 runtime을 통과한 뒤, **별도 PR**로 이미지에 `pyhwp`·`hwp5txt`·시스템 라이브러리를 넣는다. **AGPL·Python 버전(3.11/3.12 권장)·의존성 pin**은 이미지 반영 전에 정리한다.
+#### HWP Docker / 운영 이미지
+
+운영·컨테이너에서 HWP를 쓰려면 **이미지 안에 `hwp5txt` CLI**가 있어야 한다 (`pip install -r requirements.txt` + 필요 시 apt 라이브러리). 상세·Dockerfile 예시·체크리스트: **[`docs/07_아키텍처/hwp_운영이미지_반영계획.md`](../docs/07_아키텍처/hwp_운영이미지_반영계획.md)**.
+
+**저장소 현황:** 루트·`backend/`에 **Dockerfile / docker-compose 없음** (2026-05). 실제 이미지는 배포 구조 확정 후 별도 PR.
+
+**이미지 빌드 후 검증 (저장소 루트, 컨테이너 안):**
+
+```bash
+python tools/hwp_poc/check_hwp_runtime.py --json
+which hwp5txt && hwp5txt --help
+```
+
+`status: ok`가 아니면 HWP 지원을 켜지 않거나 배포를 중단한다(팀 정책). 향후 CI job 후보로 동일 스크립트 사용 가능.
+
+**장애 격리:** HWP 변환기 문제가 있어도 **PDF/DOCX/XLSX/PPTX/HWPX** 파서·검색/RAG/chunk/embedding 로직은 **별도 코드 경로**이며, HWP만 `include_extensions`에서 빼면 비활성화할 수 있다.
+
+**AGPL:** pyhwp는 **AGPLv3+** — **법무 검토가 끝난 것이 아니다.** Docker 반영은 기술 준비이며 운영 활성화 승인을 의미하지 않는다.
+
+**requirements pin:** HWP 관련 패키지는 아직 unpinned. 스테이징/Docker 성공 환경에서 `pip freeze | grep -E "pyhwp|six|lxml|olefile|cryptography"` 후 pin — `requirements.txt` TODO 주석 참고.
 
 **Typical indexing pipeline after documents:**
 
