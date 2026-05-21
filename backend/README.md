@@ -689,12 +689,12 @@ python tools/hwp_poc/hwp_e2e_api_check.py \
 
 Linux 컨테이너에서 **backend + `hwp5txt` runtime** 검증용 최소 구성. **운영 배포·AGPL 승인 완료가 아님.** HWP Automation/COM·한컴 설치 없음. 상세: **[`docs/07_아키텍처/hwp_운영이미지_반영계획.md`](../docs/07_아키텍처/hwp_운영이미지_반영계획.md)**. `scan_scope=FULL`은 worker/PIPELINE 기반(변경 없음).
 
-**파일:** `backend/Dockerfile`, `docker-compose.dev.yml`, `backend/.env.docker.example` (개발 검증용; 운영 배포·AGPL 승인 아님).
+**파일:** `backend/Dockerfile`, `docker-compose.dev.yml`, `backend/.env.example` → `backend/.env` (개발 검증용; 운영 배포·AGPL 승인 아님).
 
-**Docker (저장소 루트, compose 전용 DB):**
+**Docker (저장소 루트, compose 전용 DB + frontend):**
 
 ```bash
-cp backend/.env.docker.example backend/.env   # DB_PASSWORD 등 교체
+cp backend/.env.example backend/.env   # CHANGE_ME·비밀번호 등 교체 (실제 .env는 Git 미추적)
 
 # 최초/초기화 (named volume 삭제 — DB 데이터 전부 삭제)
 docker compose --env-file backend/.env -f docker-compose.dev.yml down -v
@@ -710,7 +710,12 @@ curl http://localhost:8000/health/embedding
 curl http://localhost:8000/health/vector-db
 ```
 
-**Worker:** `docker compose --env-file backend/.env -f docker-compose.dev.yml --profile worker up backend-worker`
+| 서비스 | 접속 |
+|--------|------|
+| **Frontend** (Vite dev) | http://localhost:5173 — [`frontend/README.md`](../frontend/README.md) |
+| Backend API | http://localhost:8000 |
+
+**Worker:** `docker compose --env-file backend/.env -f docker-compose.dev.yml --profile worker up -d backend-worker`
 
 **DB 연결:** compose **`db`** 서비스 (`DB_HOST=db`, `DB_PORT=5432`). 호스트 pgAdmin/psql: `localhost:${DB_PUBLISH_PORT:-5434}` (기본 **5434** — 호스트 `:5433` 외부 DB와 충돌 방지). **Ollama**만 `host.docker.internal:11434`. 기존 `D:\docker-data`·외부 DB 볼륨은 **연결하지 않음**.
 

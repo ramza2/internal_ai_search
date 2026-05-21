@@ -183,7 +183,7 @@ docker compose -f docker-compose.dev.yml run --rm backend \
 
 | 이슈 | 조치 |
 |------|------|
-| compose가 `backend/.env.docker.example`만 쓰면 `DB_PASSWORD=CHANGE_ME`로 `/health/db` 실패 | `env_file: backend/.env` + host override 적용 |
+| `backend/.env`에 CHANGE_ME 그대로 두면 `/health/db` 실패 | `cp backend/.env.example backend/.env` 후 실제 값으로 교체 |
 | `INITIAL_ADMIN_PASSWORD` 미설정 시 login 401 | E2E는 ACTIVE admin JWT로 API 호출 (로컬 `.env`에 비밀번호 설정 권장) |
 | embedding health 이전 timeout | 이번 검증에서 **기본 timeout으로 ok** (필요 시 `EMBEDDING_TIMEOUT_SECONDS` 상향) |
 

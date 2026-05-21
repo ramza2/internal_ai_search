@@ -1,6 +1,6 @@
-# internal-ai-search — Docker dev stack (compose DB + backend + optional worker)
+# internal-ai-search — Docker dev stack (compose DB + backend + frontend + optional worker)
 #
-# Requires backend/.env (copy from backend/.env.docker.example). Run from repo root:
+# Requires backend/.env (copy from backend/.env.example). Run from repo root:
 #   docker compose --env-file backend/.env -f docker-compose.dev.yml up -d
 #
 # Reset DB (deletes named volume data):
@@ -81,6 +81,20 @@ services:
       db-migrate:
         condition: service_completed_successfully
     command: python -m app.worker_main
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      # Vite /api proxy target inside the container (when VITE_API_BASE_URL is empty)
+      VITE_DEV_PROXY_TARGET: http://host.docker.internal:8000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - backend
 
 volumes:
   internal_ai_search_db_data:

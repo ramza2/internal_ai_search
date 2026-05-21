@@ -86,7 +86,9 @@ Figma 톤에 맞춘 **관리자·파이프라인 화면** 정리입니다. API·
 
 ## 설치·실행
 
-**실행 명령만 모아 둔 문서:** [`docs/로컬_실행_명령.md`](../docs/로컬_실행_명령.md) (API · worker · `npm run dev` / `build`)
+**실행 명령만 모아 둔 문서:** [`docs/로컬_실행_명령.md`](../docs/로컬_실행_명령.md) (API · worker · `npm run dev` / `build` · Docker Compose)
+
+### 호스트에서 Vite 실행
 
 ```bash
 cd frontend
@@ -101,13 +103,40 @@ npm run build
 npm run preview
 ```
 
+### Docker Compose 개발 (`frontend` 서비스)
+
+저장소 루트에서 backend·DB와 함께 기동합니다.
+
+```bash
+docker compose --env-file backend/.env -f docker-compose.dev.yml up -d
+# frontend만 추가/재기동
+docker compose --env-file backend/.env -f docker-compose.dev.yml up -d frontend
+```
+
+| 접속 | URL |
+|------|-----|
+| Frontend (Vite) | http://localhost:5173 |
+| Backend API | http://localhost:8000 |
+
+**`frontend/Dockerfile`:** Node 20, `npm ci`, `npm run dev -- --host 0.0.0.0 --port 5173` (개발 전용). **운영용 nginx multi-stage 빌드는 후속 TODO.**
+
+**API 주소 (`VITE_API_BASE_URL`):** React 앱은 **브라우저(호스트 PC)** 에서 실행됩니다. axios는 **컨테이너 내부의 `backend` 호스트명이 아니라** 호스트에 publish된 **`http://localhost:8000`** 으로 요청해야 합니다. (`docker-compose.dev.yml`의 `environment` 참고.)
+
+- **`VITE_API_BASE_URL=http://localhost:8000`** (Compose 기본): 브라우저 → 호스트 `:8000` 직접 호출.
+- **`VITE_API_BASE_URL` 비움:** 상대 경로 `/api` → Vite dev 서버 프록시. Compose 컨테이너에서는 `VITE_DEV_PROXY_TARGET=http://host.docker.internal:8000` 로 프록시 대상을 백엔드에 맞춥니다 (`vite.config.ts`).
+
+로컬 env: `cp frontend/.env.example frontend/.env` (Git 미추적). Compose는 `docker-compose.dev.yml`의 `environment`도 참고.
+
+값 변경 후 Vite dev 서버를 재시작하세요.
+
 ## 환경 변수 (`frontend/.env`)
 
 - **`VITE_API_BASE_URL`**
-  - **비워 두기(개발 권장):** `/api`로 요청하고 `vite.config.ts` 프록시가 백엔드로 전달.
-  - **절대 URL 지정 시:** 해당 호스트로 직접 호출하며 백엔드 CORS 설정이 필요합니다.
+  - **비워 두기(호스트 `npm run dev` 권장):** `/api`로 요청하고 `vite.config.ts` 프록시가 `127.0.0.1:8000`으로 전달.
+  - **절대 URL (`http://localhost:8000`):** 브라우저가 백엔드로 직접 호출 (Compose Docker dev 기본). 교차 출처 시 백엔드 CORS가 필요할 수 있습니다.
+- **`VITE_DEV_PROXY_TARGET`:** Docker Compose frontend 컨테이너 전용. Vite `/api` 프록시 대상 (기본 `http://host.docker.internal:8000`).
 
-값 변경 후 `npm run dev`를 다시 실행하세요.
+값 변경 후 `npm run dev`(또는 frontend 컨테이너 재시작)를 다시 실행하세요.
 
 ## 통합 검색 고급 필터 (`/search`)
 

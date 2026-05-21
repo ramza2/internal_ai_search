@@ -89,7 +89,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 | `docker-compose.dev.yml` | **추가됨** — `db`, `db-migrate`, `backend`, `backend-worker` (profile `worker`) |
 | `scripts/apply_migrations.py` | baseline + migrations 적용 |
 | `docker/db/schema/baseline_schema.sql` | DDL only (schema dump, no data) |
-| `backend/.env.docker.example` | **추가됨** — `host.docker.internal` placeholder |
+| `backend/.env.example` | Docker·호스트 공통 템플릿 → `backend/.env` |
 | `.dockerignore` | **추가됨** — venv, frontend, `tmp/` 등 제외 |
 | 루트 `Dockerfile` / `infra/*` | **없음** (운영 배포 compose는 미구성) |
 
@@ -118,7 +118,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ## 6. 이미지 빌드 후 검증 명령
 
-**작업 디렉터리:** 저장소 루트. env: `cp backend/.env.docker.example backend/.env` 후 비밀번호 교체(health/DB용).
+**작업 디렉터리:** 저장소 루트. env: `cp backend/.env.example backend/.env` 후 CHANGE_ME·비밀번호 교체(health/DB용).
 
 ### 6.1 Compose 빌드
 

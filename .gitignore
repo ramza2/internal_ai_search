@@ -1,5 +1,12 @@
 /.idea/
 
+# Local secrets — never commit (use *.example as templates only)
+.env
+backend/.env
+frontend/.env
+!.env.example
+!**/.env.example
+
 # HWP PoC: local sample .hwp files and extracted text outputs (may contain sensitive content)
 tmp/hwp_poc/
 
