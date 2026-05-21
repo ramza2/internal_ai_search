@@ -33,7 +33,7 @@
 | 3 | **`requirements.txt` HWP 관련 pin** | ☐ TODO — §7 |
 | 4 | 이미지 내 `hwp5txt --help` 성공 | ☐ `docker-compose.dev.yml` 빌드 후 실행 |
 | 5 | `python tools/hwp_poc/check_hwp_runtime.py --json` → `status: ok` | ☐ 컨테이너 `run` 후 확인 |
-| 6 | HWP E2E **조건부 Go 이상** | ☑ Docker: [`hwp_e2e_검증결과_docker.md`](./hwp_e2e_검증결과_docker.md) (2026-05-21) |
+| 6 | HWP E2E **조건부 Go 이상** | ☑ compose 내부 DB: [`docker_compose_db_e2e_검증결과.md`](./docker_compose_db_e2e_검증결과.md); ☑ 호스트 외부 DB: [`hwp_e2e_검증결과_docker.md`](./hwp_e2e_검증결과_docker.md) (2026-05-21) |
 
 ---
 
@@ -86,7 +86,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 | 경로 | 상태 |
 |------|------|
 | `backend/Dockerfile` | **추가됨** — Python 3.12-slim, `WORKDIR /app`, build context = **저장소 루트** |
-| `docker-compose.dev.yml` | **추가됨** — `backend`, `backend-worker` (profile `worker`) |
+| `docker-compose.dev.yml` | **추가됨** — `db`, `db-migrate`, `backend`, `backend-worker` (profile `worker`) |
+| `scripts/apply_migrations.py` | baseline + migrations 적용 |
+| `docker/db/schema/baseline_schema.sql` | DDL only (schema dump, no data) |
 | `backend/.env.docker.example` | **추가됨** — `host.docker.internal` placeholder |
 | `.dockerignore` | **추가됨** — venv, frontend, `tmp/` 등 제외 |
 | 루트 `Dockerfile` / `infra/*` | **없음** (운영 배포 compose는 미구성) |
@@ -136,10 +138,10 @@ docker compose -f docker-compose.dev.yml run --rm backend \
 
 **기대:** JSON `"status": "ok"`, `hwp5txt_found: true`, `hwp5txt_help_ok: true`, `imports` 전부 `true`.
 
-### 6.3 Backend API · health (호스트 DB/Ollama 필요)
+### 6.3 Backend API · health (compose DB + host Ollama)
 
 ```bash
-docker compose -f docker-compose.dev.yml up backend
+docker compose --env-file backend/.env -f docker-compose.dev.yml up -d
 
 curl http://localhost:8000/health
 curl http://localhost:8000/health/db
@@ -148,7 +150,9 @@ curl http://localhost:8000/health/embedding
 curl http://localhost:8000/health/vector-db
 ```
 
-`DB_HOST`·`OLLAMA_BASE_URL`은 **`host.docker.internal`** (`.env.docker.example` 기본). 컨테이너 `localhost` ≠ 호스트.
+- **DB:** `DB_HOST=db`, `DB_PORT=5432` (compose override). 호스트 접속: `localhost:5434` (기본).
+- **Ollama:** `OLLAMA_BASE_URL=http://host.docker.internal:11434`
+- **초기화:** `docker compose ... down -v` 후 `up -d` (volume 삭제)
 
 ### 6.4 Worker (profile)
 
@@ -255,7 +259,8 @@ low-text는 **SKIPPED**로 설계되어 있어 전체 파이프라인 중단 사
 |------|------|
 | [`hwp_e2e_검증계획.md`](./hwp_e2e_검증계획.md) | E2E 수동·API 보조 |
 | [`hwp_e2e_검증결과_템플릿.md`](./hwp_e2e_검증결과_템플릿.md) | 결과 기록 |
-| [`hwp_e2e_검증결과_docker.md`](./hwp_e2e_검증결과_docker.md) | Docker backend E2E 결과 (2026-05-21) |
+| [`docker_compose_db_e2e_검증결과.md`](./docker_compose_db_e2e_검증결과.md) | compose **전용 DB** 전체 서비스 E2E (2026-05-21 Go) |
+| [`hwp_e2e_검증결과_docker.md`](./hwp_e2e_검증결과_docker.md) | Docker backend + **호스트 외부 DB** HWP E2E (2026-05-21) |
 | [`hwp_poc_실행계획.md`](./hwp_poc_실행계획.md) | PoC·Go 판정 |
 | [`hwp_처리방식_검토.md`](./hwp_처리방식_검토.md) | 설계·후보 |
 | `backend/README.md` | HWP 운영·runtime·Docker 링크 |

@@ -691,17 +691,17 @@ Linux 컨테이너에서 **backend + `hwp5txt` runtime** 검증용 최소 구성
 
 **파일:** `backend/Dockerfile`, `docker-compose.dev.yml`, `backend/.env.docker.example` (개발 검증용; 운영 배포·AGPL 승인 아님).
 
-**Docker (저장소 루트):**
+**Docker (저장소 루트, compose 전용 DB):**
 
 ```bash
-cp backend/.env.docker.example backend/.env   # 비밀번호 교체
+cp backend/.env.docker.example backend/.env   # DB_PASSWORD 등 교체
 
-docker compose -f docker-compose.dev.yml build backend
+# 최초/초기화 (named volume 삭제 — DB 데이터 전부 삭제)
+docker compose --env-file backend/.env -f docker-compose.dev.yml down -v
+docker compose --env-file backend/.env -f docker-compose.dev.yml up -d
 
-docker compose -f docker-compose.dev.yml run --rm backend \
+docker compose --env-file backend/.env -f docker-compose.dev.yml run --rm backend \
   python tools/hwp_poc/check_hwp_runtime.py --json
-
-docker compose -f docker-compose.dev.yml up backend
 
 curl http://localhost:8000/health
 curl http://localhost:8000/health/db
@@ -710,11 +710,22 @@ curl http://localhost:8000/health/embedding
 curl http://localhost:8000/health/vector-db
 ```
 
-**Worker:** `docker compose -f docker-compose.dev.yml --profile worker up backend-worker`
+**Worker:** `docker compose --env-file backend/.env -f docker-compose.dev.yml --profile worker up backend-worker`
 
-**host.docker.internal:** 컨테이너 `localhost`는 DB/Ollama에 닿지 않음. compose는 **`backend/.env`** + `DB_HOST`/`OLLAMA_BASE_URL` override (`.env.docker.example`만으로는 `/health/db` 인증 실패).
+**DB 연결:** compose **`db`** 서비스 (`DB_HOST=db`, `DB_PORT=5432`). 호스트 pgAdmin/psql: `localhost:${DB_PUBLISH_PORT:-5434}` (기본 **5434** — 호스트 `:5433` 외부 DB와 충돌 방지). **Ollama**만 `host.docker.internal:11434`. 기존 `D:\docker-data`·외부 DB 볼륨은 **연결하지 않음**.
 
-**Health 5종·HWP E2E (Docker) 검증 기록:** [`docs/07_아키텍처/hwp_e2e_검증결과_docker.md`](../docs/07_아키텍처/hwp_e2e_검증결과_docker.md) (2026-05-21, health 5종 ok, E2E Go). embedding health timeout 시 `EMBEDDING_TIMEOUT_SECONDS` 상향(예: 30~60).
+**Health 5종·HWP E2E 검증 기록:**
+
+| 방식 | 문서 | 비고 |
+|------|------|------|
+| compose **내부 DB** (`db:5432`, volume `internal_ai_search_db_data`) | [`docs/07_아키텍처/docker_compose_db_e2e_검증결과.md`](../docs/07_아키텍처/docker_compose_db_e2e_검증결과.md) | **2026-05-21 Go** — bootstrap·WebDAV·sync·HWP·PIPELINE |
+| compose backend + **호스트 외부 DB** (`host.docker.internal:5433`) | [`docs/07_아키텍처/hwp_e2e_검증결과_docker.md`](../docs/07_아키텍처/hwp_e2e_검증결과_docker.md) | 이전 검증; 데이터·DS는 외부 DB에 유지 |
+
+**차이:** compose DB는 `down -v` 시 **데이터 전부 삭제**(초기화). 외부 DB·`D:\docker-data` 볼륨은 compose에 **연결하지 않음**. 호스트 pgAdmin은 compose DB에 `localhost:${DB_PUBLISH_PORT:-5434}`.
+
+**E2E admin:** 빈 DB bootstrap 후 `must_change_password=true` → `POST /api/auth/change-password` 필요. `backend/.env`에 `E2E_ADMIN_PASSWORD`(Git 미추적) 설정 후 `tools/e2e_compose_verify.py` 또는 HWP 스크립트 실행.
+
+embedding health timeout 시 `EMBEDDING_TIMEOUT_SECONDS` 상향(예: 30~60).
 
 **장애 격리:** HWP 변환기 문제가 있어도 **PDF/DOCX/XLSX/PPTX/HWPX** 파서·검색/RAG/chunk/embedding 로직은 **별도 코드 경로**이며, HWP만 `include_extensions`에서 빼면 비활성화할 수 있다.
 

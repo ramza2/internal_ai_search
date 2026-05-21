@@ -1,14 +1,45 @@
-# Minimal Docker dev stack — backend API + optional worker (no bundled DB).
-# Usage (repository root):
-#   docker compose -f docker-compose.dev.yml build backend
-#   docker compose -f docker-compose.dev.yml run --rm backend python tools/hwp_poc/check_hwp_runtime.py --json
-#   docker compose -f docker-compose.dev.yml up backend
+# internal-ai-search — Docker dev stack (compose DB + backend + optional worker)
 #
-# Requires backend/.env (copy from backend/.env.docker.example; not committed).
-# Do not use .env.docker.example alone for health/DB — placeholders fail auth.
-# Docker overrides host-only URLs so the same .env can serve native uvicorn (localhost).
+# Requires backend/.env (copy from backend/.env.docker.example). Run from repo root:
+#   docker compose --env-file backend/.env -f docker-compose.dev.yml up -d
+#
+# Reset DB (deletes named volume data):
+#   docker compose --env-file backend/.env -f docker-compose.dev.yml down -v
 
 services:
+  db:
+    image: pgvector/pgvector:pg18-bookworm
+    ports:
+      - "${DB_PUBLISH_PORT:-5434}:5432"
+    environment:
+      POSTGRES_DB: internal_ai_search
+      POSTGRES_USER: openlink
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in backend/.env}
+    # PG 18+ images expect the mount at /var/lib/postgresql (not .../data)
+    volumes:
+      - internal_ai_search_db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openlink -d internal_ai_search"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  db-migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - backend/.env
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: python scripts/apply_migrations.py
+    restart: "no"
+
   backend:
     build:
       context: .
@@ -18,10 +49,16 @@ services:
     env_file:
       - backend/.env
     environment:
-      DB_HOST: host.docker.internal
+      DB_HOST: db
+      DB_PORT: "5432"
       OLLAMA_BASE_URL: http://host.docker.internal:11434
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   backend-worker:
@@ -33,8 +70,17 @@ services:
     env_file:
       - backend/.env
     environment:
-      DB_HOST: host.docker.internal
+      DB_HOST: db
+      DB_PORT: "5432"
       OLLAMA_BASE_URL: http://host.docker.internal:11434
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     command: python -m app.worker_main
+
+volumes:
+  internal_ai_search_db_data:

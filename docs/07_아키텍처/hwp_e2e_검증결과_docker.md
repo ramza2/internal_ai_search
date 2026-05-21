@@ -15,7 +15,7 @@
 | Docker 이미지 | `internal_ai_search-backend:latest` (`08db62c11a6b`) |
 | compose | `docker-compose.dev.yml` — `backend` 서비스 |
 | env | `backend/.env` (로컬, **미커밋**). compose `env_file` + `DB_HOST`/`OLLAMA_BASE_URL` override |
-| DB | `host.docker.internal:5433` / `internal_ai_search` |
+| DB | compose `db:5432` (검증 당시는 `host.docker.internal:5433` 외부 DB — **이후 compose 전용 DB로 전환**, [`로컬_실행_명령.md`](../로컬_실행_명령.md) §5) |
 | Ollama | `http://host.docker.internal:11434` — `gemma3`, `bge-m3` |
 | Embedding dimension | 1024 |
 | API base URL | `http://localhost:8000` (컨테이너 포트 매핑) |

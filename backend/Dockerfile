@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxslt1-dev \
     zlib1g-dev \
     libffi-dev \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt /app/requirements.txt
@@ -23,7 +24,10 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY backend/app /app/app
 COPY backend/tests /app/tests
+COPY backend/db /app/backend/db
 COPY tools /app/tools
+COPY scripts /app/scripts
+COPY docker/db /app/docker/db
 
 ENV PYTHONPATH=/app
 ENV HWP5TXT_BIN=hwp5txt
