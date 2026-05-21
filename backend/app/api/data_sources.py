@@ -353,13 +353,15 @@ def sync_data_source_webdav_tree(
     include_hidden: Annotated[bool, Query()] = False,
     apply_exclusions: Annotated[bool, Query()] = True,
     detect_deleted: Annotated[bool, Query()] = False,
+    scan_scope: Annotated[str | None, Query()] = None,
 ) -> JSONResponse:
     """Bounded BFS recursive WebDAV sync (PROPFIND Depth: 1 per folder).
 
     Upserts every visited file/folder into ``files`` in a single
-    transaction. ``max_depth`` and ``max_items`` bound the walk; the
-    operation runs synchronously inside the request and is expected to
-    move to a worker queue in later milestones.
+    transaction. ``max_depth`` and ``max_items`` bound the walk (LIMITED
+    mode only). ``scan_scope=FULL`` is rejected — use the worker pipeline.
+
+    The operation runs synchronously inside the request.
 
     ``detect_deleted`` (default ``false``) opts into Step 11's soft-mark of
     rows that disappeared between scans. Detection only runs when the walk
@@ -372,6 +374,7 @@ def sync_data_source_webdav_tree(
             settings,
             data_source_id,
             start_path=start_path,
+            scan_scope=scan_scope,
             max_depth=max_depth,
             max_items=max_items,
             include_hidden=include_hidden,
@@ -393,6 +396,7 @@ def sync_data_source_webdav_tree(
                 "include_hidden": include_hidden,
                 "apply_exclusions": apply_exclusions,
                 "detect_deleted": detect_deleted,
+                "scan_scope": scan_scope,
             },
             error_message=(body or {}).get("message") if isinstance(body, dict) else None,
         )

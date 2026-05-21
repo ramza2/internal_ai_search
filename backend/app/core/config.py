@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     hwp_parser_timeout_seconds: int = 120
     hwp_min_extracted_text_length: int = 50
 
+    # FULL sync-tree (worker/pipeline only): optional emergency item cap. 0 = none.
+    sync_tree_emergency_max_items: int = 0
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

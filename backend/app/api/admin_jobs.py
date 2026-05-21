@@ -168,6 +168,7 @@ def admin_enqueue_sync_tree_job(
 ) -> JSONResponse:
     """Queue a **PENDING** ``WEBDAV_SYNC_TREE`` job for the DB polling worker."""
     job_params = {
+        "scan_scope": body.scan_scope,
         "start_path": body.start_path,
         "max_depth": body.max_depth,
         "max_items": body.max_items,
@@ -192,6 +193,7 @@ def admin_enqueue_sync_tree_job(
         data_source_id=body.data_source_id,
         detail={
             "job_id": str(jid) if jid else None,
+            "scan_scope": body.scan_scope,
             "start_path": body.start_path,
             "max_depth": body.max_depth,
             "max_items": body.max_items,

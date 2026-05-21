@@ -1,5 +1,7 @@
 /** GET /api/admin/jobs, /api/admin/jobs/{id}, /api/admin/jobs/{id}/failures */
 
+import type { ScanScope } from "@/constants/pipelineLimits";
+
 export interface AdminJob {
   id: string;
   data_source_id: string | null;
@@ -107,12 +109,24 @@ export type AdminTestEnqueueResponse = {
 export type AdminSyncTreeJobRequest = {
   data_source_id: string;
   start_path?: string;
-  max_depth?: number;
-  max_items?: number;
+  scan_scope?: ScanScope;
+  max_depth?: number | null;
+  max_items?: number | null;
   include_hidden?: boolean;
   apply_exclusions?: boolean;
   detect_deleted?: boolean;
   priority?: number;
+};
+
+/** Nested `params.sync_tree` for POST /api/admin/pipeline-jobs */
+export type PipelineSyncTreeParams = {
+  scan_scope?: ScanScope;
+  start_path?: string;
+  max_depth?: number | null;
+  max_items?: number | null;
+  include_hidden?: boolean;
+  apply_exclusions?: boolean;
+  detect_deleted?: boolean;
 };
 
 export type AdminSyncTreeJobResponse = {

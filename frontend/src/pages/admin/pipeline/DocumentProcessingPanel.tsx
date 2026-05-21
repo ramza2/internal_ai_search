@@ -19,6 +19,7 @@ import type {
   DocumentProcessRequestParams,
   DocumentProcessResponse,
 } from "@/types/documentProcessing";
+import { SERVER_MAX_FILE_BYTES } from "@/constants/pipelineLimits";
 import { formatInt } from "@/utils/format";
 import styles from "../DocumentProcessModal.module.css";
 
@@ -28,6 +29,7 @@ const MB_OPTIONS: { label: string; bytes: number }[] = [
   { label: "10 MB", bytes: 10 * 1024 * 1024 },
   { label: "50 MB", bytes: 50 * 1024 * 1024 },
   { label: "100 MB", bytes: 100 * 1024 * 1024 },
+  { label: "서버 최대 (256 MB)", bytes: SERVER_MAX_FILE_BYTES },
 ];
 
 const DOC_EXT_KEYS = ["pdf", "docx", "xlsx", "pptx", "hwpx", "hwp"] as const;
@@ -111,6 +113,8 @@ export type DocumentProcessingPanelProps = {
   disableRunButtons?: boolean;
   /** true이면 동기 `문서 처리 실행` 버튼을 숨깁니다(부모에서 백그라운드 Job 생성). dry_run 대상 확인은 유지 */
   suppressDocumentRealRun?: boolean;
+  /** Initial max download size (bytes); pipeline modal passes server max. */
+  defaultMaxFileBytes?: number;
 };
 
 export function DocumentProcessingPanel({
@@ -124,9 +128,10 @@ export function DocumentProcessingPanel({
   onDocumentParamsSnapshot,
   disableRunButtons = false,
   suppressDocumentRealRun = false,
+  defaultMaxFileBytes = 52_428_800,
 }: DocumentProcessingPanelProps) {
   const [limit, setLimit] = useState(50);
-  const [maxBytes, setMaxBytes] = useState(52_428_800);
+  const [maxBytes, setMaxBytes] = useState(defaultMaxFileBytes);
   const [extSelected, setExtSelected] = useState<Record<DocExtKey, boolean>>(() => {
     const o = {} as Record<DocExtKey, boolean>;
     for (const k of DOC_EXT_KEYS) o[k] = true;
@@ -160,7 +165,7 @@ export function DocumentProcessingPanel({
 
   const resetForm = useCallback(() => {
     setLimit(50);
-    setMaxBytes(52_428_800);
+    setMaxBytes(defaultMaxFileBytes);
     const o = {} as Record<DocExtKey, boolean>;
     for (const k of DOC_EXT_KEYS) o[k] = true;
     setExtSelected(o);
@@ -169,7 +174,7 @@ export function DocumentProcessingPanel({
     setProcessError("");
     setFollowUpMsg(null);
     setLastResponse(null);
-  }, []);
+  }, [defaultMaxFileBytes]);
 
   useEffect(() => {
     resetForm();

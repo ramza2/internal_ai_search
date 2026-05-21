@@ -14,6 +14,12 @@ from app.schemas.admin_jobs import (
     PROCESS_PENDING_TEXT_DEFAULT_EXTENSIONS,
 )
 from app.services import scan_jobs_service
+from app.services.sync_tree_scope import (
+    SCAN_SCOPE_FULL,
+    SCAN_SCOPE_LIMITED,
+    SERVER_MAX_PROCESS_FILE_BYTES,
+    normalize_scan_scope,
+)
 from app.workers.worker_types import WorkerJob, WorkerRunResult
 
 logger = logging.getLogger(__name__)
@@ -57,21 +63,22 @@ def pipeline_advisory_int_keys(parent_id: UUID) -> tuple[int, int]:
 def default_pipeline_params() -> dict[str, Any]:
     return {
         "sync_tree": {
+            "scan_scope": SCAN_SCOPE_FULL,
             "start_path": "/",
-            "max_depth": 3,
-            "max_items": 5000,
+            "max_depth": None,
+            "max_items": None,
             "include_hidden": False,
             "apply_exclusions": True,
-            "detect_deleted": False,
+            "detect_deleted": True,
         },
         "process_text": {
             "limit": 100,
-            "max_file_size_bytes": 5_242_880,
+            "max_file_size_bytes": SERVER_MAX_PROCESS_FILE_BYTES,
             "include_extensions": PROCESS_PENDING_TEXT_DEFAULT_EXTENSIONS,
         },
         "process_documents": {
             "limit": 50,
-            "max_file_size_bytes": 52_428_800,
+            "max_file_size_bytes": SERVER_MAX_PROCESS_FILE_BYTES,
             "include_extensions": PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS,
             "reprocess_skipped": False,
         },
@@ -161,14 +168,23 @@ def build_step_job_params(
         "pipeline_step_index": int(step_index),
     }
     if step == scan_jobs_service.JOB_TYPE_WEBDAV_SYNC_TREE:
-        return {
+        scope = normalize_scan_scope(out.get("scan_scope"))
+        base_st = {
             **meta,
+            "scan_scope": scope,
             "start_path": str(out.get("start_path") or "/").strip() or "/",
-            "max_depth": _clamp_int(out.get("max_depth"), 3, lo=0, hi=20),
-            "max_items": _clamp_int(out.get("max_items"), 5000, lo=1, hi=50_000),
             "include_hidden": bool(out.get("include_hidden", False)),
             "apply_exclusions": bool(out.get("apply_exclusions", True)),
-            "detect_deleted": bool(out.get("detect_deleted", False)),
+            "detect_deleted": bool(out.get("detect_deleted", scope == SCAN_SCOPE_FULL)),
+        }
+        if scope == SCAN_SCOPE_FULL:
+            return {**base_st, "max_depth": None, "max_items": None}
+        md_raw = out.get("max_depth")
+        mi_raw = out.get("max_items")
+        return {
+            **base_st,
+            "max_depth": _clamp_int(md_raw, 3, lo=0, hi=20),
+            "max_items": _clamp_int(mi_raw, 5000, lo=1, hi=50_000),
         }
     if step == scan_jobs_service.JOB_TYPE_PROCESS_PENDING_TEXT:
         inc = out.get("include_extensions")
@@ -179,9 +195,9 @@ def build_step_job_params(
             "limit": _clamp_int(out.get("limit"), 100, lo=1, hi=5000),
             "max_file_size_bytes": _clamp_int(
                 out.get("max_file_size_bytes"),
-                5_242_880,
+                SERVER_MAX_PROCESS_FILE_BYTES,
                 lo=1,
-                hi=100 * 1024 * 1024,
+                hi=SERVER_MAX_PROCESS_FILE_BYTES,
             ),
             "include_extensions": str(inc) if inc is not None else PROCESS_PENDING_TEXT_DEFAULT_EXTENSIONS,
         }
@@ -194,9 +210,9 @@ def build_step_job_params(
             "limit": _clamp_int(out.get("limit"), 50, lo=1, hi=5000),
             "max_file_size_bytes": _clamp_int(
                 out.get("max_file_size_bytes"),
-                52_428_800,
+                SERVER_MAX_PROCESS_FILE_BYTES,
                 lo=1,
-                hi=100 * 1024 * 1024,
+                hi=SERVER_MAX_PROCESS_FILE_BYTES,
             ),
             "include_extensions": str(inc) if inc is not None else PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS,
             "reprocess_skipped": bool(out.get("reprocess_skipped", False)),

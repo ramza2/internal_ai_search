@@ -108,8 +108,9 @@ class AdminSyncTreeJobRequest(BaseModel):
 
     data_source_id: UUID
     start_path: str = "/"
-    max_depth: int = Field(default=3, ge=0, le=20)
-    max_items: int = Field(default=5000, ge=1, le=50_000)
+    scan_scope: str | None = None
+    max_depth: int | None = Field(default=None, ge=0, le=20)
+    max_items: int | None = Field(default=None, ge=1, le=50_000)
     include_hidden: bool = False
     apply_exclusions: bool = True
     detect_deleted: bool = False
@@ -120,6 +121,30 @@ class AdminSyncTreeJobRequest(BaseModel):
     def normalize_start_path(cls, v: Any) -> str:
         s = str(v or "").strip()
         return s if s else "/"
+
+    @field_validator("scan_scope", mode="before")
+    @classmethod
+    def normalize_scan_scope_field(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip().upper()
+        if s in ("FULL", "LIMITED"):
+            return s
+        return None
+
+    @model_validator(mode="after")
+    def apply_limited_defaults(self) -> AdminSyncTreeJobRequest:
+        from app.services.sync_tree_scope import SCAN_SCOPE_FULL, normalize_scan_scope
+
+        scope = normalize_scan_scope(self.scan_scope)
+        object.__setattr__(self, "scan_scope", scope)
+        if scope == SCAN_SCOPE_FULL:
+            return self
+        if self.max_depth is None:
+            object.__setattr__(self, "max_depth", 3)
+        if self.max_items is None:
+            object.__setattr__(self, "max_items", 5000)
+        return self
 
 
 class AdminSyncTreeJobResponse(BaseModel):
@@ -139,7 +164,7 @@ class AdminProcessPendingTextJobRequest(BaseModel):
 
     data_source_id: UUID
     limit: int = Field(default=100, ge=1, le=5000)
-    max_file_size_bytes: int = Field(default=5_242_880, ge=1, le=100 * 1024 * 1024)
+    max_file_size_bytes: int = Field(default=5_242_880, ge=1, le=256 * 1024 * 1024)
     include_extensions: str | None = Field(default=None, max_length=2000)
     priority: int = 0
 
@@ -167,7 +192,7 @@ class AdminProcessPendingDocumentsJobRequest(BaseModel):
 
     data_source_id: UUID
     limit: int = Field(default=50, ge=1, le=5000)
-    max_file_size_bytes: int = Field(default=52_428_800, ge=1, le=100 * 1024 * 1024)
+    max_file_size_bytes: int = Field(default=52_428_800, ge=1, le=256 * 1024 * 1024)
     include_extensions: str | None = Field(default=None, max_length=2000)
     reprocess_skipped: bool = False
     priority: int = 0

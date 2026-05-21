@@ -22,6 +22,11 @@ import {
 } from "@/utils/userFriendlyLabels";
 import type { DataSource } from "@/types/dataSource";
 import type { DocumentProcessResponse } from "@/types/documentProcessing";
+import {
+  SERVER_MAX_FILE_BYTES,
+  SERVER_MAX_FILE_MB,
+  type ScanScope,
+} from "@/constants/pipelineLimits";
 import type { AdminPipelineJobRequest } from "@/types/adminJobs";
 import type { FileStatsResponse } from "@/types/file";
 import type {
@@ -280,14 +285,16 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
   }, []);
 
   const [startPath, setStartPath] = useState("/");
+  const [scanScope, setScanScope] = useState<ScanScope>("FULL");
   const [maxDepth, setMaxDepth] = useState(3);
   const [maxItems, setMaxItems] = useState(5000);
   const [includeHidden, setIncludeHidden] = useState(false);
   const [applyExclusions, setApplyExclusions] = useState(true);
-  const [detectDeleted, setDetectDeleted] = useState(false);
+  const [detectDeleted, setDetectDeleted] = useState(true);
 
   const [textLimit, setTextLimit] = useState(100);
-  const [textMaxMb, setTextMaxMb] = useState(5);
+  const [textUseServerMax, setTextUseServerMax] = useState(true);
+  const [textMaxMb, setTextMaxMb] = useState(SERVER_MAX_FILE_MB);
   const [textIncludeExt, setTextIncludeExt] = useState("txt,md,py,java,sql,json,yml");
 
   const [chunkLimit, setChunkLimit] = useState(100);
@@ -383,17 +390,42 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
     }));
   }, []);
 
+  const textMaxFileBytes = textUseServerMax
+    ? SERVER_MAX_FILE_BYTES
+    : Math.max(1, Number(textMaxMb) || SERVER_MAX_FILE_MB) * 1024 * 1024;
+
+  function buildSyncTreeJobFields(): {
+    scan_scope: ScanScope;
+    start_path: string;
+    max_depth?: number | null;
+    max_items?: number | null;
+    include_hidden: boolean;
+    apply_exclusions: boolean;
+    detect_deleted: boolean;
+  } {
+    const base = {
+      start_path: startPath || "/",
+      include_hidden: includeHidden,
+      apply_exclusions: applyExclusions,
+      detect_deleted: detectDeleted,
+    };
+    if (scanScope === "FULL") {
+      return { scan_scope: "FULL", ...base, max_depth: null, max_items: null };
+    }
+    return {
+      scan_scope: "LIMITED",
+      ...base,
+      max_depth: Math.min(20, Math.max(0, Number(maxDepth) || 3)),
+      max_items: Math.min(50_000, Math.max(1, Number(maxItems) || 5000)),
+    };
+  }
+
   async function enqueueBackgroundJobForStep(stepId: StepId): Promise<{ jobId: string; jobType: string }> {
     const ds = dataSource.id;
     if (stepId === "sync") {
       const r = await adminJobsApi.postAdminSyncTreeJob({
         data_source_id: ds,
-        start_path: startPath || "/",
-        max_depth: maxDepth,
-        max_items: maxItems,
-        include_hidden: includeHidden,
-        apply_exclusions: applyExclusions,
-        detect_deleted: detectDeleted,
+        ...buildSyncTreeJobFields(),
         priority: 0,
       });
       return { jobId: r.job_id, jobType: r.job_type };
@@ -402,7 +434,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
       const r = await adminJobsApi.postAdminProcessPendingTextJob({
         data_source_id: ds,
         limit: textLimit,
-        max_file_size_bytes: textMaxMb * 1024 * 1024,
+        max_file_size_bytes: textMaxFileBytes,
         include_extensions: textIncludeExt.trim() || undefined,
         priority: 0,
       });
@@ -550,6 +582,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
 
   const disableManualActions =
     autoRunning || loading !== null || bgSequentialRunning || bgEnqueueStep !== null || serverPipelineBusy;
+
   async function executeServerPipelineJob() {
     setServerPipelineErr("");
     setServerPipelineJobId(null);
@@ -565,7 +598,6 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
       if (co >= cs) {
         throw new Error("chunk_overlap은 chunk_size보다 작아야 합니다.");
       }
-      const textBytes = Math.max(1, Number(textMaxMb) || 5) * 1024 * 1024;
       const body: AdminPipelineJobRequest = {
         data_source_id: dataSource.id,
         priority: 0,
@@ -577,17 +609,10 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
           "EMBED_PENDING_CHUNKS",
         ],
         params: {
-          sync_tree: {
-            start_path: startPath || "/",
-            max_depth: maxDepth,
-            max_items: maxItems,
-            include_hidden: includeHidden,
-            apply_exclusions: applyExclusions,
-            detect_deleted: detectDeleted,
-          },
+          sync_tree: buildSyncTreeJobFields(),
           process_text: {
             limit: textLimit,
-            max_file_size_bytes: textBytes,
+            max_file_size_bytes: textMaxFileBytes,
             include_extensions: textIncludeExt.trim() || undefined,
           },
           process_documents: {
@@ -781,13 +806,31 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
 
       try {
         if (stepId === "sync") {
+          if (scanScope === "FULL") {
+            aborted = true;
+            failedAutoKey = autoKey;
+            failedMessage =
+              "전체 저장소 처리는 백그라운드 파이프라인에서 실행해 주세요. (바로 실행은 제한 모드만 지원합니다.)";
+            const durationMs = Math.round(performance.now() - t0);
+            bumpAuto(autoKey, {
+              status: "error",
+              finishedAt: new Date().toISOString(),
+              durationMs,
+              errorMessage: failedMessage,
+            });
+            patchSnap("sync", { status: "error", payload: null, error: failedMessage });
+            setLastRun({ step: "sync", ok: false });
+            continue;
+          }
+          const lim = buildSyncTreeJobFields();
           const data = await dsApi.syncTree(dataSource.id, {
-            start_path: startPath || "/",
-            max_depth: maxDepth,
-            max_items: maxItems,
-            include_hidden: includeHidden,
-            apply_exclusions: applyExclusions,
-            detect_deleted: detectDeleted,
+            start_path: lim.start_path,
+            scan_scope: "LIMITED",
+            max_depth: lim.max_depth ?? 3,
+            max_items: lim.max_items ?? 5000,
+            include_hidden: lim.include_hidden,
+            apply_exclusions: lim.apply_exclusions,
+            detect_deleted: lim.detect_deleted,
           });
           const display = truncatePayload(data);
           const ok = !isTerminalErrorStatus(display.status);
@@ -825,7 +868,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
         if (stepId === "text") {
           const data = await dsApi.processPendingText(dataSource.id, {
             limit: textLimit,
-            max_file_size_bytes: textMaxMb * 1024 * 1024,
+            max_file_size_bytes: textMaxFileBytes,
             include_extensions: textIncludeExt.trim() || undefined,
             dry_run: false,
           });
@@ -1037,13 +1080,16 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
             }
           >
             <InfoBox title={`저장소: ${dataSource.name}`}>
-              저장소의 파일을 수집하고 내용을 분석한 뒤, AI 검색에 반영합니다.
+              저장소의 모든 하위 폴더와 파일을 백그라운드에서 수집하고, 문서 내용을 분석해 AI 검색에 반영합니다.
+              기본값은 <strong>전체 저장소</strong> 수집이며, 폴더 깊이·항목 수 제한은 고급 설정에서 변경할 수 있습니다.
+              텍스트·문서 파일 크기는 서버 설정상 최대 {SERVER_MAX_FILE_MB}MB까지 처리합니다.
             </InfoBox>
 
             <div className={styles.primaryPanel}>
-              <h3 className={styles.primaryPanelTitle}>권장: 전체 작업 등록</h3>
+              <h3 className={styles.primaryPanelTitle}>권장: 전체 검색 반영 작업 등록</h3>
               <p className="muted" style={{ margin: 0, fontSize: "0.85rem" }}>
-                브라우저를 닫아도 서버에서 계속 처리됩니다. 파일이 많으면 <strong>백그라운드 실행</strong>을 선택하세요.
+                브라우저를 닫아도 서버 worker가 순서대로 처리합니다. 진행·취소는{" "}
+                <Link to="/admin/jobs">작업 이력</Link>에서 확인하세요.
               </p>
 
             <div className={styles.execModeRow} role="radiogroup" aria-label="실행 모드" style={{ marginTop: "0.75rem" }}>
@@ -1091,7 +1137,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     disabled={disableManualActions}
                     onClick={() => setConfirmServerPipelineOpen(true)}
                   >
-                    전체 작업 등록
+                    전체 검색 반영 작업 등록
                   </Button>
                   <Button
                     type="button"
@@ -1323,31 +1369,75 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
               bgStep={executionMode === "background" ? bgSteps.sync : undefined}
               executionMode={executionMode}
             >
-              <AdvancedSection title="고급 설정" summary="폴더 깊이·항목 수·숨김 파일 등">
+              <AdvancedSection title="고급 설정" summary="수집 범위·폴더 깊이·항목 수·숨김 파일 등">
               <div className="formGrid" style={{ maxWidth: 640 }}>
                 <FormField label="시작 폴더">
                   <Input value={startPath} onChange={(e) => setStartPath(e.target.value)} disabled={formDisabled} />
                 </FormField>
-                <FormField label="최대 폴더 깊이">
-                  <Input
-                    type="number"
-                    value={maxDepth}
-                    onChange={(e) => setMaxDepth(Number(e.target.value) || 0)}
-                    min={0}
-                    max={20}
-                    disabled={formDisabled}
-                  />
-                </FormField>
-                <FormField label="최대 항목 수">
-                  <Input
-                    type="number"
-                    value={maxItems}
-                    onChange={(e) => setMaxItems(Number(e.target.value) || 1)}
-                    min={1}
-                    max={50000}
-                    disabled={formDisabled}
-                  />
-                </FormField>
+                <fieldset style={{ border: "none", padding: 0, margin: 0 }}>
+                  <legend style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.35rem" }}>
+                    실행 범위 (파일 목록 수집)
+                  </legend>
+                  <label className={styles.check}>
+                    <input
+                      type="radio"
+                      name="pipeline-scan-scope"
+                      checked={scanScope === "FULL"}
+                      onChange={() => setScanScope("FULL")}
+                      disabled={formDisabled}
+                    />
+                    전체 저장소 처리
+                  </label>
+                  <label className={styles.check}>
+                    <input
+                      type="radio"
+                      name="pipeline-scan-scope"
+                      checked={scanScope === "LIMITED"}
+                      onChange={() => setScanScope("LIMITED")}
+                      disabled={formDisabled}
+                    />
+                    제한 설정 직접 지정
+                  </label>
+                  {scanScope === "FULL" ? (
+                    <p className="muted" style={{ fontSize: "0.8rem", margin: "0.35rem 0 0" }}>
+                      모든 하위 폴더를 탐색합니다. 파일 수가 많으면 오래 걸릴 수 있으며, 작업 이력에서 진행 상태를
+                      확인할 수 있습니다. 바로 실행(동기 API)은 사용할 수 없습니다.
+                    </p>
+                  ) : null}
+                </fieldset>
+                {scanScope === "LIMITED" ? (
+                  <>
+                    <FormField label="최대 폴더 깊이">
+                      <Input
+                        type="number"
+                        value={maxDepth}
+                        onChange={(e) => setMaxDepth(Number(e.target.value) || 0)}
+                        min={0}
+                        max={20}
+                        disabled={formDisabled}
+                      />
+                    </FormField>
+                    <FormField label="최대 항목 수">
+                      <Input
+                        type="number"
+                        value={maxItems}
+                        onChange={(e) => setMaxItems(Number(e.target.value) || 1)}
+                        min={1}
+                        max={50000}
+                        disabled={formDisabled}
+                      />
+                    </FormField>
+                  </>
+                ) : (
+                  <>
+                    <FormField label="최대 폴더 깊이">
+                      <Input value="제한 없음" disabled readOnly />
+                    </FormField>
+                    <FormField label="최대 항목 수">
+                      <Input value="제한 없음" disabled readOnly />
+                    </FormField>
+                  </>
+                )}
                 <label className={styles.check}>
                   <input
                     type="checkbox"
@@ -1384,19 +1474,26 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                   size="sm"
                   style={{ marginTop: "0.65rem" }}
                   loading={loading === "sync"}
-                  disabled={disableManualActions && loading !== "sync"}
+                  disabled={(disableManualActions && loading !== "sync") || scanScope === "FULL"}
+                  title={
+                    scanScope === "FULL"
+                      ? "전체 저장소 처리는 백그라운드 파이프라인에서 실행해 주세요."
+                      : undefined
+                  }
                   onClick={() =>
                     requestConfirm(() =>
-                      runWithLoading("sync", () =>
-                        dsApi.syncTree(dataSource.id, {
-                          start_path: startPath || "/",
-                          max_depth: maxDepth,
-                          max_items: maxItems,
-                          include_hidden: includeHidden,
-                          apply_exclusions: applyExclusions,
-                          detect_deleted: detectDeleted,
-                        })
-                      )
+                      runWithLoading("sync", () => {
+                        const lim = buildSyncTreeJobFields();
+                        return dsApi.syncTree(dataSource.id, {
+                          start_path: lim.start_path,
+                          scan_scope: "LIMITED",
+                          max_depth: lim.max_depth ?? 3,
+                          max_items: lim.max_items ?? 5000,
+                          include_hidden: lim.include_hidden,
+                          apply_exclusions: lim.apply_exclusions,
+                          detect_deleted: lim.detect_deleted,
+                        });
+                      })
                     )
                   }
                 >
@@ -1450,18 +1547,43 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     ))}
                   </Select>
                 </FormField>
-                <FormField label="최대 파일 크기">
-                  <Select
-                    value={String(textMaxMb)}
-                    onChange={(e) => setTextMaxMb(Number(e.target.value))}
-                    disabled={formDisabled}
-                  >
-                    {[1, 2, 5, 10, 20, 50].map((n) => (
-                      <option key={n} value={n}>
-                        {n} MB
-                      </option>
-                    ))}
-                  </Select>
+                <FormField
+                  label="최대 파일 크기"
+                  hint={`서버 설정상 최대 ${SERVER_MAX_FILE_MB}MB까지 처리합니다.`}
+                >
+                  <label className={styles.check}>
+                    <input
+                      type="radio"
+                      name="pipeline-text-size"
+                      checked={textUseServerMax}
+                      onChange={() => setTextUseServerMax(true)}
+                      disabled={formDisabled}
+                    />
+                    서버 허용 최대 크기까지 ({SERVER_MAX_FILE_MB} MB)
+                  </label>
+                  <label className={styles.check}>
+                    <input
+                      type="radio"
+                      name="pipeline-text-size"
+                      checked={!textUseServerMax}
+                      onChange={() => setTextUseServerMax(false)}
+                      disabled={formDisabled}
+                    />
+                    직접 지정
+                  </label>
+                  {!textUseServerMax ? (
+                    <Select
+                      value={String(textMaxMb)}
+                      onChange={(e) => setTextMaxMb(Number(e.target.value))}
+                      disabled={formDisabled}
+                    >
+                      {[1, 2, 5, 10, 20, 50, 100, SERVER_MAX_FILE_MB].map((n) => (
+                        <option key={n} value={n}>
+                          {n} MB
+                        </option>
+                      ))}
+                    </Select>
+                  ) : null}
                 </FormField>
                 <FormField label="대상 확장자" hint="쉼표로 구분. 비우면 전체 허용">
                   <Input value={textIncludeExt} onChange={(e) => setTextIncludeExt(e.target.value)} disabled={formDisabled} />
@@ -1479,7 +1601,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                     void runWithLoading("text", () =>
                       dsApi.processPendingText(dataSource.id, {
                         limit: textLimit,
-                        max_file_size_bytes: textMaxMb * 1024 * 1024,
+                        max_file_size_bytes: textMaxFileBytes,
                         include_extensions: textIncludeExt.trim() || undefined,
                         dry_run: true,
                       })
@@ -1500,7 +1622,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                         runWithLoading("text", () =>
                           dsApi.processPendingText(dataSource.id, {
                             limit: textLimit,
-                            max_file_size_bytes: textMaxMb * 1024 * 1024,
+                            max_file_size_bytes: textMaxFileBytes,
                             include_extensions: textIncludeExt.trim() || undefined,
                             dry_run: false,
                           })
@@ -1554,6 +1676,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
                 onDocumentParamsSnapshot={onDocumentParamsSnapshot}
                 disableRunButtons={disableManualActions}
                 suppressDocumentRealRun={executionMode === "background"}
+                defaultMaxFileBytes={SERVER_MAX_FILE_BYTES}
               />
               {executionMode === "background" && (
                 <>

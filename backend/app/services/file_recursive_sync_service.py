@@ -51,6 +51,12 @@ from app.services.files_upsert import (
     coerce_iso_to_dt,
     truncate_message,
 )
+from app.services.sync_tree_scope import (
+    SYNC_FULL_BLOCKED_MESSAGE,
+    emergency_max_items_from_settings,
+    normalize_scan_scope,
+    resolve_sync_tree_limits,
+)
 from app.webdav.recursive_listing import collect_tree
 
 
@@ -83,8 +89,7 @@ _WARN_SKIP_HIDDEN = (
     "Deleted detection was skipped because hidden items were excluded."
 )
 
-# Defensive bounds on the request parameters (the route also constrains
-# these via FastAPI ``Query``; keep them in sync with the spec).
+# LIMITED-mode bounds (sync HTTP Query and worker LIMITED jobs).
 MAX_DEPTH_CEILING = 20
 MAX_ITEMS_CEILING = 50_000
 _FAILED_PATHS_LIMIT = 20
@@ -98,14 +103,6 @@ class RecursiveSyncCoreOutcome(NamedTuple):
     payload: dict[str, Any]
     http_status: int
     finalized_scan_job: bool
-
-
-def _clamp(value: int, lo: int, hi: int) -> int:
-    if value < lo:
-        return lo
-    if value > hi:
-        return hi
-    return value
 
 
 def _canonical_start_path(raw: str) -> str:
@@ -221,8 +218,9 @@ def run_webdav_recursive_sync_core(
     *,
     scan_job_id: UUID | None,
     start_path: str,
-    max_depth: int,
-    max_items: int,
+    scan_scope: str | None = None,
+    max_depth: int | None = None,
+    max_items: int | None = None,
     include_hidden: bool,
     apply_exclusions: bool,
     detect_deleted: bool = False,
@@ -250,15 +248,24 @@ def run_webdav_recursive_sync_core(
         "source_type": source_type_str,
     }
 
-    md = _clamp(int(max_depth), 0, MAX_DEPTH_CEILING)
-    mi = _clamp(int(max_items), 1, MAX_ITEMS_CEILING)
+    scope = normalize_scan_scope(scan_scope)
+    emergency_mi = emergency_max_items_from_settings(settings)
+    md, mi, is_full_scope = resolve_sync_tree_limits(
+        scope,
+        max_depth,
+        max_items,
+        emergency_max_items=emergency_mi,
+    )
     sp = _canonical_start_path(start_path)
     detect_deleted_flag = bool(detect_deleted)
     request_summary: dict[str, Any] = {
+        "scan_scope": scope,
         "start_path": sp,
-        "max_depth": md,
-        "max_items": mi,
+        "max_depth": None if is_full_scope else md,
+        "max_items": None if is_full_scope else mi,
     }
+    if is_full_scope and emergency_mi > 0:
+        request_summary["emergency_max_items"] = emergency_mi
 
     try:
         source_type_enum = SourceType(source_type_str)
@@ -442,7 +449,16 @@ def run_webdav_recursive_sync_core(
         if len(aggregated_warnings) < _WARNINGS_LIMIT:
             aggregated_warnings.append(w)
     if counters.truncated and len(aggregated_warnings) < _WARNINGS_LIMIT:
-        aggregated_warnings.append(f"Result was truncated by max_items={mi}")
+        if is_full_scope and emergency_mi > 0:
+            aggregated_warnings.append(
+                f"Result was truncated by emergency max_items={emergency_mi}"
+            )
+        elif is_full_scope:
+            aggregated_warnings.append(
+                "Result was truncated during full repository scan (internal limit)"
+            )
+        else:
+            aggregated_warnings.append(f"Result was truncated by max_items={mi}")
 
     if fatal is not None:
         outer_msg = str(fatal.get("message") or "WebDAV recursive sync failed")
@@ -676,14 +692,25 @@ def run_webdav_recursive_sync(
     ds_id: UUID,
     *,
     start_path: str,
-    max_depth: int,
-    max_items: int,
+    scan_scope: str | None = None,
+    max_depth: int = 3,
+    max_items: int = 5000,
     include_hidden: bool,
     apply_exclusions: bool,
     detect_deleted: bool = False,
     requested_by: UUID | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Synchronous HTTP entry: create ``RUNNING`` scan job then run core logic."""
+    if normalize_scan_scope(scan_scope) == "FULL":
+        return (
+            {
+                "status": "error",
+                "data_source_id": str(ds_id),
+                "message": SYNC_FULL_BLOCKED_MESSAGE,
+                "scan_scope": "FULL",
+            },
+            400,
+        )
     scan_job_id = scan_jobs_service.create_scan_job(
         ds_id=ds_id,
         job_type=scan_jobs_service.JOB_TYPE_WEBDAV_SYNC_TREE,
@@ -694,6 +721,7 @@ def run_webdav_recursive_sync(
         ds_id,
         scan_job_id=scan_job_id,
         start_path=start_path,
+        scan_scope=scan_scope or "LIMITED",
         max_depth=max_depth,
         max_items=max_items,
         include_hidden=include_hidden,

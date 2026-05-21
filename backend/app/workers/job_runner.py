@@ -114,10 +114,10 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
                 success=False,
                 message="WEBDAV_SYNC_TREE job is missing data_source_id",
             )
+        from app.services.sync_tree_scope import parse_sync_job_params
+
         p = params or {}
-        start_path = str(p.get("start_path") if p.get("start_path") is not None else "/").strip() or "/"
-        max_depth = _coerce_int(p.get("max_depth"), 3, lo=0, hi=20)
-        max_items = _coerce_int(p.get("max_items"), 5000, lo=1, hi=50_000)
+        start_path, scan_scope, max_depth, max_items = parse_sync_job_params(p)
         include_hidden = bool(p.get("include_hidden", False))
         apply_exclusions = bool(p.get("apply_exclusions", True))
         detect_deleted = bool(p.get("detect_deleted", False))
@@ -128,6 +128,7 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
             job.data_source_id,
             scan_job_id=job.id,
             start_path=start_path,
+            scan_scope=scan_scope,
             max_depth=max_depth,
             max_items=max_items,
             include_hidden=include_hidden,

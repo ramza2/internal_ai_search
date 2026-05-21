@@ -9,6 +9,7 @@ import {
   Input,
   Select,
 } from "@/components/ui";
+import type { ScanScope } from "@/constants/pipelineLimits";
 import type { DataSource } from "@/types/dataSource";
 import { PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS } from "@/types/adminJobs";
 import { JOB_TYPE_FILTER_OPTIONS } from "@/utils/userFriendlyLabels";
@@ -70,6 +71,7 @@ export function AdminJobsEnqueuePanel({ dataSources, defaultDataSourceId, listBu
 
   const [syncDsId, setSyncDsId] = useState("");
   const [syncStartPath, setSyncStartPath] = useState("/");
+  const [syncScanScope, setSyncScanScope] = useState<ScanScope>("FULL");
   const [syncMaxDepth, setSyncMaxDepth] = useState(3);
   const [syncMaxItems, setSyncMaxItems] = useState(5000);
   const [syncIncludeHidden, setSyncIncludeHidden] = useState(false);
@@ -156,8 +158,15 @@ export function AdminJobsEnqueuePanel({ dataSources, defaultDataSourceId, listBu
       const res = await adminJobsApi.postAdminSyncTreeJob({
         data_source_id: dsId,
         start_path: syncStartPath.trim() || "/",
-        max_depth: Math.min(20, Math.max(0, Number(syncMaxDepth) || 3)),
-        max_items: Math.min(50_000, Math.max(1, Number(syncMaxItems) || 5000)),
+        scan_scope: syncScanScope,
+        max_depth:
+          syncScanScope === "FULL"
+            ? null
+            : Math.min(20, Math.max(0, Number(syncMaxDepth) || 3)),
+        max_items:
+          syncScanScope === "FULL"
+            ? null
+            : Math.min(50_000, Math.max(1, Number(syncMaxItems) || 5000)),
         include_hidden: syncIncludeHidden,
         apply_exclusions: syncApplyExclusions,
         detect_deleted: syncDetectDeleted,
@@ -381,12 +390,40 @@ export function AdminJobsEnqueuePanel({ dataSources, defaultDataSourceId, listBu
             <FilterField label="시작 폴더">
               <Input value={syncStartPath} onChange={(e) => setSyncStartPath(e.target.value)} disabled={syncBusy || formDisabled} />
             </FilterField>
-            <FilterField label="최대 폴더 깊이">
-              <Input type="number" min={0} max={20} value={String(syncMaxDepth)} onChange={(e) => setSyncMaxDepth(Number(e.target.value))} disabled={syncBusy || formDisabled} />
+            <FilterField label="수집 범위">
+              <Select
+                value={syncScanScope}
+                onChange={(e) => setSyncScanScope(e.target.value as ScanScope)}
+                disabled={syncBusy || formDisabled}
+              >
+                <option value="FULL">전체 저장소 처리</option>
+                <option value="LIMITED">제한 설정 직접 지정</option>
+              </Select>
             </FilterField>
-            <FilterField label="최대 항목 수">
-              <Input type="number" min={1} max={50000} value={String(syncMaxItems)} onChange={(e) => setSyncMaxItems(Number(e.target.value))} disabled={syncBusy || formDisabled} />
-            </FilterField>
+            {syncScanScope === "LIMITED" ? (
+              <>
+                <FilterField label="최대 폴더 깊이">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={20}
+                    value={String(syncMaxDepth)}
+                    onChange={(e) => setSyncMaxDepth(Number(e.target.value))}
+                    disabled={syncBusy || formDisabled}
+                  />
+                </FilterField>
+                <FilterField label="최대 항목 수">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={50000}
+                    value={String(syncMaxItems)}
+                    onChange={(e) => setSyncMaxItems(Number(e.target.value))}
+                    disabled={syncBusy || formDisabled}
+                  />
+                </FilterField>
+              </>
+            ) : null}
             <FilterField label="우선순위">
               <Input type="number" value={String(syncPriority)} onChange={(e) => setSyncPriority(Number(e.target.value))} disabled={syncBusy || formDisabled} />
             </FilterField>
