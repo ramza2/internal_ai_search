@@ -14,7 +14,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        // Windows: localhost → IPv6 [::1] 우선 시 Docker/WSL 등이 8000을 잡으면 404.
+        // uvicorn은 보통 127.0.0.1:8000 에만 떠 있으므로 IPv4로 고정합니다.
+        target: "http://127.0.0.1:8000",
         changeOrigin: true,
       },
     },
