@@ -1,0 +1,16 @@
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+.idea
+
+backend/.venv
+backend/.env
+.env
+.venv-hwp-poc
+
+frontend/node_modules
+frontend/dist
+tmp

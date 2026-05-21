@@ -31,9 +31,9 @@
 | 1 | **AGPL 법무 검토** (pyhwp AGPLv3+) | ☐ 미완 — 기록 필수 |
 | 2 | **운영 Python 버전** 결정 (권장 **3.11 / 3.12**) | ☐ PoC에 3.14 사용 사례 있음 — 운영과 분리 |
 | 3 | **`requirements.txt` HWP 관련 pin** | ☐ TODO — §7 |
-| 4 | 이미지 내 `hwp5txt --help` 성공 | ☐ Docker 미구성 시 미검증 |
-| 5 | `python tools/hwp_poc/check_hwp_runtime.py --json` → `status: ok` | ☐ 이미지 빌드 후 실행 |
-| 6 | HWP E2E **조건부 Go 이상** | ☐ [`hwp_e2e_검증결과_템플릿.md`](./hwp_e2e_검증결과_템플릿.md) |
+| 4 | 이미지 내 `hwp5txt --help` 성공 | ☐ `docker-compose.dev.yml` 빌드 후 실행 |
+| 5 | `python tools/hwp_poc/check_hwp_runtime.py --json` → `status: ok` | ☐ 컨테이너 `run` 후 확인 |
+| 6 | HWP E2E **조건부 Go 이상** | ☑ Docker: [`hwp_e2e_검증결과_docker.md`](./hwp_e2e_검증결과_docker.md) (2026-05-21) |
 
 ---
 
@@ -79,55 +79,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ---
 
-## 5. Dockerfile 반영안
+## 5. Dockerfile · Docker Compose (개발 검증용)
 
-### 5.1 저장소 현황 (2026-05 확인)
+### 5.1 저장소 현황 (2026-05 Docker dev 마일스톤)
 
-| 경로 | 존재 |
+| 경로 | 상태 |
 |------|------|
-| `backend/Dockerfile` | **없음** |
-| 루트 `Dockerfile` | **없음** |
-| `docker-compose.yml` / `infra/*` | **없음** |
+| `backend/Dockerfile` | **추가됨** — Python 3.12-slim, `WORKDIR /app`, build context = **저장소 루트** |
+| `docker-compose.dev.yml` | **추가됨** — `backend`, `backend-worker` (profile `worker`) |
+| `backend/.env.docker.example` | **추가됨** — `host.docker.internal` placeholder |
+| `.dockerignore` | **추가됨** — venv, frontend, `tmp/` 등 제외 |
+| 루트 `Dockerfile` / `infra/*` | **없음** (운영 배포 compose는 미구성) |
 
-→ **이번 마일스톤에서는 Dockerfile 파일을 새로 만들지 않는다.** 배포 구조 확정 후 별도 PR에서 반영한다.  
-아래는 **참고용 최소 예시**이다.
+**의미:** 컨테이너에서 **backend + `hwp5txt` runtime** 검증 가능. **운영 배포 승인·AGPL 법무 완료·HWP E2E 완료를 의미하지 않는다.**
 
-### 5.2 참고 Dockerfile 예시 (backend 단일 이미지)
+### 5.2 `backend/Dockerfile` 요약
 
-```dockerfile
-# syntax=docker/dockerfile:1
-# 예시 — 실제 베이스·WORKDIR·엔트리포인트는 팀 표준에 맞게 조정
+- 베이스: `python:3.12-slim-bookworm`
+- apt (빌드 안정성): `build-essential`, `gcc`, `python3-dev`, `libxml2`, `libxml2-dev`, `libxslt1-dev`, `zlib1g-dev`, `libffi-dev`
+- pip: `backend/requirements.txt` (`pyhwp`, `six`, `lxml`, `olefile`, `cryptography`, …)
+- 복사: `backend/app`, `backend/tests`, `tools/`
+- `ENV PYTHONPATH=/app` → `uvicorn app.main:app`, `python tools/hwp_poc/check_hwp_runtime.py`
+- 기본 `CMD`: uvicorn `:8000`
 
-FROM python:3.12-slim-bookworm
-
-WORKDIR /app
-
-# HWP: 최소 시스템 라이브러리 (빌드 후 check_hwp_runtime으로 검증·축소)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libxml2 \
-    libxslt1.1 \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt
-
-# 저장소 루트 기준 tools/ 복사 (runtime check용)
-COPY tools/hwp_poc /app/tools/hwp_poc
-
-COPY backend /app/backend
-
-ENV PYTHONPATH=/app/backend
-ENV HWP5TXT_BIN=hwp5txt
-ENV HWP_PARSER_TIMEOUT_SECONDS=120
-ENV HWP_MIN_EXTRACTED_TEXT_LENGTH=50
-
-# 선택: 빌드 시 HWP runtime gate (CI/배포 체크 후보)
-# RUN python /app/tools/hwp_poc/check_hwp_runtime.py --json
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-**Worker**는 동일 이미지에서 `python -m app.worker_main`으로 실행하는 구성을 가정한다 (`docs/로컬_실행_명령.md`).
+**Worker**는 동일 이미지에서 `python -m app.worker_main` (`docker-compose.dev.yml` — profile `worker`).
 
 ### 5.3 반영 시 최소 변경 체크
 
@@ -141,33 +116,53 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 ## 6. 이미지 빌드 후 검증 명령
 
-프로젝트에 **docker-compose가 없으므로** 서비스명은 팀 도입 시 치환한다.
+**작업 디렉터리:** 저장소 루트. env: `cp backend/.env.docker.example backend/.env` 후 비밀번호 교체(health/DB용).
 
-### 6.1 이미지 빌드 (예시)
+### 6.1 Compose 빌드
 
 ```bash
-# 저장소 루트
-docker build -f path/to/Dockerfile -t internal-ai-search-backend:hwp-check .
+docker compose -f docker-compose.dev.yml build backend
 ```
 
-### 6.2 Runtime check (필수)
+### 6.2 Runtime check (필수, DB 불필요)
 
 ```bash
-docker run --rm internal-ai-search-backend:hwp-check \
+docker compose -f docker-compose.dev.yml run --rm backend \
   python tools/hwp_poc/check_hwp_runtime.py --json
 
-docker run --rm internal-ai-search-backend:hwp-check \
+docker compose -f docker-compose.dev.yml run --rm backend \
   sh -c 'which hwp5txt && hwp5txt --help | head -n 5'
 ```
 
 **기대:** JSON `"status": "ok"`, `hwp5txt_found: true`, `hwp5txt_help_ok: true`, `imports` 전부 `true`.
 
-### 6.3 docker compose 도입 후 (템플릿)
+### 6.3 Backend API · health (호스트 DB/Ollama 필요)
 
 ```bash
-docker compose build backend
-docker compose run --rm backend python tools/hwp_poc/check_hwp_runtime.py --json
-docker compose run --rm backend hwp5txt --help
+docker compose -f docker-compose.dev.yml up backend
+
+curl http://localhost:8000/health
+curl http://localhost:8000/health/db
+curl http://localhost:8000/health/llm
+curl http://localhost:8000/health/embedding
+curl http://localhost:8000/health/vector-db
+```
+
+`DB_HOST`·`OLLAMA_BASE_URL`은 **`host.docker.internal`** (`.env.docker.example` 기본). 컨테이너 `localhost` ≠ 호스트.
+
+### 6.4 Worker (profile)
+
+```bash
+docker compose -f docker-compose.dev.yml --profile worker up backend-worker
+docker compose -f docker-compose.dev.yml --profile worker run --rm backend-worker
+```
+
+### 6.5 단독 `docker build` (compose 없이)
+
+```bash
+docker build -f backend/Dockerfile -t internal-ai-search-backend:dev .
+docker run --rm internal-ai-search-backend:dev \
+  python tools/hwp_poc/check_hwp_runtime.py --json
 ```
 
 ### 6.4 배포/CI 게이트 (향후, CI 미구현)
@@ -260,6 +255,7 @@ low-text는 **SKIPPED**로 설계되어 있어 전체 파이프라인 중단 사
 |------|------|
 | [`hwp_e2e_검증계획.md`](./hwp_e2e_검증계획.md) | E2E 수동·API 보조 |
 | [`hwp_e2e_검증결과_템플릿.md`](./hwp_e2e_검증결과_템플릿.md) | 결과 기록 |
+| [`hwp_e2e_검증결과_docker.md`](./hwp_e2e_검증결과_docker.md) | Docker backend E2E 결과 (2026-05-21) |
 | [`hwp_poc_실행계획.md`](./hwp_poc_실행계획.md) | PoC·Go 판정 |
 | [`hwp_처리방식_검토.md`](./hwp_처리방식_검토.md) | 설계·후보 |
 | `backend/README.md` | HWP 운영·runtime·Docker 링크 |
@@ -267,4 +263,4 @@ low-text는 **SKIPPED**로 설계되어 있어 전체 파이프라인 중단 사
 
 ---
 
-*문서 버전: 2026-05-18 · Dockerfile 미존재 확인, 예시만 제공*
+*문서 버전: 2026-05-21 · `backend/Dockerfile`, `docker-compose.dev.yml`, `.env.docker.example` 추가 (개발 검증용; 운영·AGPL·E2E 미완)*

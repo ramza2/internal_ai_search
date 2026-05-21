@@ -685,20 +685,36 @@ python tools/hwp_poc/hwp_e2e_api_check.py \
 
 결과 기록: **`docs/07_아키텍처/hwp_e2e_검증결과_템플릿.md`**. DB 변경 단계는 `--run-documents` 등 플래그를 명시해야 실행된다.
 
-#### HWP Docker / 운영 이미지
+#### HWP Docker / 개발 컨테이너
 
-운영·컨테이너에서 HWP를 쓰려면 **이미지 안에 `hwp5txt` CLI**가 있어야 한다 (`pip install -r requirements.txt` + 필요 시 apt 라이브러리). 상세·Dockerfile 예시·체크리스트: **[`docs/07_아키텍처/hwp_운영이미지_반영계획.md`](../docs/07_아키텍처/hwp_운영이미지_반영계획.md)**.
+Linux 컨테이너에서 **backend + `hwp5txt` runtime** 검증용 최소 구성. **운영 배포·AGPL 승인 완료가 아님.** HWP Automation/COM·한컴 설치 없음. 상세: **[`docs/07_아키텍처/hwp_운영이미지_반영계획.md`](../docs/07_아키텍처/hwp_운영이미지_반영계획.md)**. `scan_scope=FULL`은 worker/PIPELINE 기반(변경 없음).
 
-**저장소 현황:** 루트·`backend/`에 **Dockerfile / docker-compose 없음** (2026-05). 실제 이미지는 배포 구조 확정 후 별도 PR.
+**파일:** `backend/Dockerfile`, `docker-compose.dev.yml`, `backend/.env.docker.example` (개발 검증용; 운영 배포·AGPL 승인 아님).
 
-**이미지 빌드 후 검증 (저장소 루트, 컨테이너 안):**
+**Docker (저장소 루트):**
 
 ```bash
-python tools/hwp_poc/check_hwp_runtime.py --json
-which hwp5txt && hwp5txt --help
+cp backend/.env.docker.example backend/.env   # 비밀번호 교체
+
+docker compose -f docker-compose.dev.yml build backend
+
+docker compose -f docker-compose.dev.yml run --rm backend \
+  python tools/hwp_poc/check_hwp_runtime.py --json
+
+docker compose -f docker-compose.dev.yml up backend
+
+curl http://localhost:8000/health
+curl http://localhost:8000/health/db
+curl http://localhost:8000/health/llm
+curl http://localhost:8000/health/embedding
+curl http://localhost:8000/health/vector-db
 ```
 
-`status: ok`가 아니면 HWP 지원을 켜지 않거나 배포를 중단한다(팀 정책). 향후 CI job 후보로 동일 스크립트 사용 가능.
+**Worker:** `docker compose -f docker-compose.dev.yml --profile worker up backend-worker`
+
+**host.docker.internal:** 컨테이너 `localhost`는 DB/Ollama에 닿지 않음. compose는 **`backend/.env`** + `DB_HOST`/`OLLAMA_BASE_URL` override (`.env.docker.example`만으로는 `/health/db` 인증 실패).
+
+**Health 5종·HWP E2E (Docker) 검증 기록:** [`docs/07_아키텍처/hwp_e2e_검증결과_docker.md`](../docs/07_아키텍처/hwp_e2e_검증결과_docker.md) (2026-05-21, health 5종 ok, E2E Go). embedding health timeout 시 `EMBEDDING_TIMEOUT_SECONDS` 상향(예: 30~60).
 
 **장애 격리:** HWP 변환기 문제가 있어도 **PDF/DOCX/XLSX/PPTX/HWPX** 파서·검색/RAG/chunk/embedding 로직은 **별도 코드 경로**이며, HWP만 `include_extensions`에서 빼면 비활성화할 수 있다.
 

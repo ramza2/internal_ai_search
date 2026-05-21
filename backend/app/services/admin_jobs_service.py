@@ -11,6 +11,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.db.database import get_db_connection
+from app.services.action_log_service import sanitize_error_message
 from app.services.pipeline_progress import (
     compute_pipeline_summary_dict,
     overlay_pipeline_counters_on_job_dict,

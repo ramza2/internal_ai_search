@@ -343,6 +343,7 @@ curl -sS "{BASE}/api/files/{FILE_ID}/chunks/{CHUNK_ID}/preview?context_lines=5" 
 | Runtime 점검 | `python tools/hwp_poc/check_hwp_runtime.py` |
 | **API E2E 보조 스크립트** | `python tools/hwp_poc/hwp_e2e_api_check.py` — documents dry_run/실행, chunk, embedding, search, preview 일부 자동화. **운영 코드 아님.** 토큰·추출 **본문 전문 출력 금지.** DB 변경 단계는 `--run-documents` 등 **명시 플래그** 필요. |
 | **결과 기록 템플릿** | [`hwp_e2e_검증결과_템플릿.md`](./hwp_e2e_검증결과_템플릿.md) — 단계별 성공/카운트·SQL·Go/No-Go 정리 |
+| **Docker backend 결과** | [`hwp_e2e_검증결과_docker.md`](./hwp_e2e_검증결과_docker.md) — compose + host DB/Ollama (2026-05-21 Go) |
 | PoC 실행 | [`hwp_poc_실행계획.md`](./hwp_poc_실행계획.md) |
 | 설계·정책 | [`hwp_처리방식_검토.md`](./hwp_처리방식_검토.md) |
 | Backend 운영 | `backend/README.md` — HWP 운영 점검 |
