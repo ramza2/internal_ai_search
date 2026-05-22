@@ -37,11 +37,13 @@ class HwpParserAvailabilityTest(unittest.TestCase):
 
 class HwpParserOutputTest(unittest.TestCase):
     @patch("app.parsers.hwp_parser.settings")
+    @patch("app.parsers.hwp_parser._resolve_hwp5html_bin", return_value=None)
     @patch("app.parsers.hwp_parser._resolve_hwp5txt_bin", return_value="/usr/bin/hwp5txt")
     @patch("app.parsers.hwp_parser.subprocess.run")
     def test_short_text_no_extractable(
-        self, mock_run: MagicMock, _mock_bin: MagicMock, mock_settings: MagicMock
+        self, mock_run: MagicMock, _mock_bin: MagicMock, _html: MagicMock, mock_settings: MagicMock
     ) -> None:
+        mock_settings.hwp_extraction_strategy = "hwp5txt_only"
         mock_settings.hwp_min_extracted_text_length = 50
         mock_settings.hwp_parser_timeout_seconds = 120
         mock_run.return_value = subprocess.CompletedProcess(
@@ -53,11 +55,13 @@ class HwpParserOutputTest(unittest.TestCase):
         self.assertEqual(result.error_code, ERR_NO_EXTRACTABLE_TEXT)
 
     @patch("app.parsers.hwp_parser.settings")
+    @patch("app.parsers.hwp_parser._resolve_hwp5html_bin", return_value=None)
     @patch("app.parsers.hwp_parser._resolve_hwp5txt_bin", return_value="/usr/bin/hwp5txt")
     @patch("app.parsers.hwp_parser.subprocess.run")
     def test_success_with_enough_text(
-        self, mock_run: MagicMock, _mock_bin: MagicMock, mock_settings: MagicMock
+        self, mock_run: MagicMock, _mock_bin: MagicMock, _html: MagicMock, mock_settings: MagicMock
     ) -> None:
+        mock_settings.hwp_extraction_strategy = "hwp5txt_only"
         mock_settings.hwp_min_extracted_text_length = 10
         mock_settings.hwp_parser_timeout_seconds = 120
         body = "연구소기업 사업계획서\n" * 5
@@ -71,11 +75,13 @@ class HwpParserOutputTest(unittest.TestCase):
         self.assertGreaterEqual(result.metadata.get("line_count", 0), 1)
 
     @patch("app.parsers.hwp_parser.settings")
+    @patch("app.parsers.hwp_parser._resolve_hwp5html_bin", return_value=None)
     @patch("app.parsers.hwp_parser._resolve_hwp5txt_bin", return_value="/usr/bin/hwp5txt")
     @patch("app.parsers.hwp_parser.subprocess.run")
     def test_timeout(
-        self, mock_run: MagicMock, _mock_bin: MagicMock, mock_settings: MagicMock
+        self, mock_run: MagicMock, _mock_bin: MagicMock, _html: MagicMock, mock_settings: MagicMock
     ) -> None:
+        mock_settings.hwp_extraction_strategy = "hwp5txt_only"
         mock_settings.hwp_min_extracted_text_length = 50
         mock_settings.hwp_parser_timeout_seconds = 1
         mock_run.side_effect = subprocess.TimeoutExpired(cmd=["hwp5txt"], timeout=1)

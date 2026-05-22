@@ -611,23 +611,26 @@ curl -X POST "http://localhost:8000/api/data-sources/{id}/process-pending-text?d
 
 Linux-friendly **document parser adapters** live under `app/parsers/`. Each parser implements `supports(extension, mime_type)` and `parse_bytes(...)`, registered by `registry.get_parser_for_extension`. This endpoint **does not** use HWP Automation/COM, OCR, or legacy OLE **DOC/XLS/PPT** parsers.
 
-**Supported formats (1st pass):** `pdf`, `docx`, `xlsx`, `pptx`, `hwpx`, **`hwp` (binary, via `hwp5txt` CLI)**
+**Supported formats (1st pass):** `pdf`, `docx`, `xlsx`, `pptx`, `hwpx`, **`hwp` (binary, via `hwp5txt` / `hwp5html` CLI, default tiered)**
 
 **Still unsupported:** `doc`, `xls`, `ppt` (legacy OLE binary). **No** HWP Automation/COM, **no** Windows 한컴오피스 dependency.
 
 #### HWP binary (`.hwp`) — `app/parsers/hwp_parser.py`
 
-- **Converter:** external **`hwp5txt`** subprocess (`shell=False`, list args, per-file timeout). The backend does **not** import pyhwp APIs at runtime beyond what the CLI needs.
-- **Dependencies (pip):** `pyhwp`, `six`, `lxml`, `olefile` (and existing `cryptography`). PoC also required explicit `six` when using newer Python.
-- **License:** **pyhwp is AGPLv3+**. Complete legal review before production deployment or SaaS use. Until then, treat HWP as opt-in via server packages + env.
-- **Environment variables:** `HWP5TXT_BIN` (default `hwp5txt`), `HWP_PARSER_TIMEOUT_SECONDS` (default **120**), `HWP_MIN_EXTRACTED_TEXT_LENGTH` (default **50**). Rows with less meaningful text after strip → `SKIPPED` / `NO_EXTRACTABLE_TEXT` (e.g. 별첨·표 양식 only).
+- **Extraction (default `tiered`):** `hwp5html` → HTML flatten (`app/parsers/hwp_html_flattener.py`, stdlib `html.parser`) → quality check → insufficient/failure 시 **`hwp5txt` fallback** → 둘 다 부족하면 `NO_EXTRACTABLE_TEXT`. Revert to legacy path: `HWP_EXTRACTION_STRATEGY=hwp5txt_only`.
+- **CLI:** `hwp5html` and `hwp5txt` subprocess only (`shell=False`, shared timeout). No pyhwp Python API at runtime. **`hwp5html` ships with the same `pyhwp` pip package** (no extra requirements entry).
+- **Dependencies (pip):** `pyhwp`, `six`, `lxml`, `olefile`, `cryptography`.
+- **License:** **pyhwp is AGPLv3+**. Legal review **not complete** — treat HWP as opt-in until approved.
+- **Metadata (in-memory `ParserResult.metadata` only; no DB schema change):** `extraction_strategy`, `converter_used`, `fallback_used`, `extraction_quality`, `html_table_*`, `txt_table_placeholder_count`, etc. No full text or stderr bodies in metadata.
+- **Table/form HWP:** PoC 3건에서 html ≥ txt; RFP·양식형은 hwp5txt **NONE** → tiered **FULL**. **HWPX** still preferred when available; 표-heavy HWP without HWPX remains a partial-extraction case.
+- **PoC tools:** [`hwp_표양식_추출고도화_poc.md`](../docs/07_아키텍처/hwp_표양식_추출고도화_poc.md), `tools/hwp_poc/hwp_table_extraction_poc.py`, [`hwp_표양식_추출고도화_결과.md`](../docs/07_아키텍처/hwp_표양식_추출고도화_결과.md).
 - **Failure mapping:** converter missing → `HWP_CONVERTER_NOT_AVAILABLE` (surfaced as parse failure); timeout → `HWP_CONVERSION_TIMEOUT`; other CLI errors → `HWP_CONVERSION_FAILED` or `PARSING_FAILED`; password hints in stderr → `PASSWORD_PROTECTED`.
 - **Citation:** same as other documents — `file_contents.extracted_text` → chunking computes **`start_line` / `end_line`** on normalized text. UI/help text: **converted TXT line range**, not original HWP page numbers.
 - **PoC (WSL2/Linux):** sample01/03 본문형 문서 추출 OK; sample02 low-text 양식 → `NO_EXTRACTABLE_TEXT` policy validated. See `docs/07_아키텍처/hwp_poc_실행계획.md`.
 
 #### HWP 운영 점검 (runtime · E2E)
 
-**변환기:** `HwpParser`는 **`hwp5txt` CLI**가 반드시 필요하다. backend는 pyhwp Python API를 직접 import하지 않고 subprocess만 호출한다.
+**변환기:** `tiered` / `hwp5html_only` 전략에는 **`hwp5html` + `hwp5txt`(fallback)** CLI가 필요하다. `hwp5txt_only`는 `hwp5txt`만 필요. backend는 subprocess만 호출한다.
 
 **필요 Python 패키지 (pip, `requirements.txt` 참고):**
 
@@ -645,9 +648,13 @@ Linux-friendly **document parser adapters** live under `app/parsers/`. Each pars
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `HWP5TXT_BIN` | `hwp5txt` | CLI 경로 또는 명령명 |
-| `HWP_PARSER_TIMEOUT_SECONDS` | `120` | 파일 1건 변환 timeout(초) |
-| `HWP_MIN_EXTRACTED_TEXT_LENGTH` | `50` | strip 후 의미 길이 미만 → `NO_EXTRACTABLE_TEXT` |
+| `HWP_EXTRACTION_STRATEGY` | `tiered` | `tiered` \| `hwp5txt_only` \| `hwp5html_only` |
+| `HWP5TXT_BIN` | `hwp5txt` | hwp5txt CLI |
+| `HWP5HTML_BIN` | `hwp5html` | hwp5html CLI (pyhwp 동일 패키지) |
+| `HWP_PARSER_TIMEOUT_SECONDS` | `120` | hwp5txt/hwp5html 공통 timeout(초) |
+| `HWP_MIN_EXTRACTED_TEXT_LENGTH` | `50` | hwp5txt 경로 최소 의미 길이 |
+| `HWP_HTML_MIN_EXTRACTED_TEXT_LENGTH` | `50` | hwp5html flatten 최소 의미 길이 |
+| `HWP_HTML_MIN_GAIN_RATIO` | `1.5` | tiered 시 html 채택 gain 비율(보조) |
 
 **Runtime 점검 (샘플 HWP 없음, backend import 없음):**
 
@@ -657,7 +664,16 @@ python tools/hwp_poc/check_hwp_runtime.py
 python tools/hwp_poc/check_hwp_runtime.py --json
 ```
 
-`status: ok` — `hwp5txt` 발견, `--help` 성공, 위 import 전부 통과. 실패 시 `missing_imports` / `hwp5txt_help_error` 확인.
+`status: ok` — 전략에 필요한 CLI(`hwp5txt` / `hwp5html`) 발견·`--help` 성공, import 전부 통과. `tiered`에서 `hwp5html` 없으면 note와 함께 fail(또는 `hwp5txt_only`로 전략 변경).
+
+**Tiered E2E 스모크 (표·양식 HWP, 로컬/compose):**
+
+1. `python tools/hwp_poc/check_hwp_runtime.py --json` — `hwp5html_found`, `hwp5html_help_ok`, `hwp_extraction_strategy: tiered`
+2. `backend/.env`에 `HWP_EXTRACTION_STRATEGY=tiered` 확인
+3. `POST /api/data-sources/{id}/process-pending-documents` with `include_extensions=hwp`
+4. 성공 시 `ParserResult.metadata`에 `converter_used=hwp5html`, `fallback_used=false` (로그/디버그; DB 컬럼 없음)
+5. 이전 `NO_EXTRACTABLE_TEXT`이던 표·양식 HWP가 **COMPLETED** + `file_contents`에 flatten 텍스트(표 블록·`--- table N ---`)인지 확인
+6. `chunk-completed-text` → `embed-pending-chunks` → `search` / preview로 키워드·line citation 확인
 
 **E2E 검증 (서비스 파이프라인):** 단위 테스트만으로는 부족하다. `sync-tree` → `process-pending-documents` → `chunk-completed-text` → `embed-pending-chunks` → `search` / `answer` → `file preview` 순서는 **`docs/07_아키텍처/hwp_e2e_검증계획.md`** 를 따른다. 샘플 `.hwp`·추출 TXT는 **Git 커밋 금지** (`tmp/hwp_poc/`).
 

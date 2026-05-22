@@ -293,6 +293,8 @@ python tools/hwp_poc/hwp5txt_poc.py \
 | 용도 | 샘플 `.hwp` 순회 → `hwp5txt` subprocess → TXT 저장 → JSONL 리포트 |
 | 운영 연동 | **없음** (backend에서 import 하지 않음) |
 
+**표·양식 고도화 (별도 PoC):** 본 문서는 **hwp5txt 1차** 추출 검증이다. 표·양식·`<표>` placeholder 이슈는 **[`hwp_표양식_추출고도화_poc.md`](./hwp_표양식_추출고도화_poc.md)** 및 `tools/hwp_poc/hwp_table_extraction_poc.py` (hwp5txt vs **hwp5html**)를 따른다. 운영 `HwpParser` 교체는 해당 PoC Go 이후.
+
 **CLI 인자:**
 
 | 인자 | 기본값 |

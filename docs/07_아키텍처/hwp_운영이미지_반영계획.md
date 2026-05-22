@@ -12,13 +12,13 @@
 
 | 항목 | 내용 |
 |------|------|
-| Parser | `backend/app/parsers/hwp_parser.py` — **`hwp5txt` subprocess** (`shell=False`, timeout, stderr 요약) |
-| CLI 출처 | **`pyhwp`** pip 패키지가 `hwp5txt` 엔트리포인트 제공 |
+| Parser | `backend/app/parsers/hwp_parser.py` — 기본 **`tiered`**: `hwp5html` → flatten → 품질 검사 → `hwp5txt` fallback |
+| CLI 출처 | **`pyhwp`** pip 패키지가 **`hwp5txt`**, **`hwp5html`** 엔트리포인트 제공 (추가 pip 패키지 없음) |
 | PoC 교훈 | **`pyhwp`만 설치 시 `six` 누락** 등으로 실패 — `six`, `lxml`, `olefile`, `cryptography` **명시 설치** 필요 |
 | 환경 | **Linux / headless** 전제 (WSL2 PoC·로컬 E2E 일부 검증됨) |
 | 미사용 | HWP Automation/COM, Windows 한컴 |
 
-운영 backend는 pyhwp Python API를 **직접 import하지 않는다.** 이미지에 **`hwp5txt`가 PATH에 있고 실행 가능**하면 된다.
+운영 backend는 pyhwp Python API를 **직접 import하지 않는다.** `HWP_EXTRACTION_STRATEGY=tiered`(기본)일 때 **`hwp5html`과 `hwp5txt`가 PATH에서 실행 가능**해야 한다. `hwp5txt_only` 롤백 시 `hwp5txt`만 필요.
 
 ---
 
@@ -31,8 +31,8 @@
 | 1 | **AGPL 법무 검토** (pyhwp AGPLv3+) | ☐ 미완 — 기록 필수 |
 | 2 | **운영 Python 버전** 결정 (권장 **3.11 / 3.12**) | ☐ PoC에 3.14 사용 사례 있음 — 운영과 분리 |
 | 3 | **`requirements.txt` HWP 관련 pin** | ☐ TODO — §7 |
-| 4 | 이미지 내 `hwp5txt --help` 성공 | ☐ `docker-compose.dev.yml` 빌드 후 실행 |
-| 5 | `python tools/hwp_poc/check_hwp_runtime.py --json` → `status: ok` | ☐ 컨테이너 `run` 후 확인 |
+| 4 | 이미지 내 `hwp5txt --help` · `hwp5html --help` 성공 | ☐ `docker-compose.dev.yml` 빌드 후 실행 |
+| 5 | `python tools/hwp_poc/check_hwp_runtime.py --json` → `status: ok` (전략 `tiered`) | ☐ `hwp5html_found`, `hwp5html_help_ok` 포함 |
 | 6 | HWP E2E **조건부 Go 이상** | ☑ compose 내부 DB: [`docker_compose_db_e2e_검증결과.md`](./docker_compose_db_e2e_검증결과.md); ☑ 호스트 외부 DB: [`hwp_e2e_검증결과_docker.md`](./hwp_e2e_검증결과_docker.md) (2026-05-21) |
 
 ---

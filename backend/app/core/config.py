@@ -51,10 +51,14 @@ class Settings(BaseSettings):
     worker_stale_timeout_minutes: int = 30
     worker_max_jobs_per_loop: int = 1
 
-    # --- HWP binary parser (hwp5txt subprocess; AGPL — see README) ------------
+    # --- HWP binary parser (hwp5txt / hwp5html subprocess; AGPL — see README) --
+    hwp_extraction_strategy: str = "tiered"
     hwp5txt_bin: str = "hwp5txt"
+    hwp5html_bin: str = "hwp5html"
     hwp_parser_timeout_seconds: int = 120
     hwp_min_extracted_text_length: int = 50
+    hwp_html_min_extracted_text_length: int = 50
+    hwp_html_min_gain_ratio: float = 1.5
 
     # FULL sync-tree (worker/pipeline only): optional emergency item cap. 0 = none.
     sync_tree_emergency_max_items: int = 0
