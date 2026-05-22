@@ -501,6 +501,7 @@ def process_data_source_pending_documents(
     include_extensions: Annotated[str | None, Query()] = None,
     dry_run: Annotated[bool, Query()] = False,
     reprocess_skipped: Annotated[bool, Query()] = False,
+    reprocess_hwp_no_extractable_text: Annotated[bool, Query()] = False,
 ) -> JSONResponse:
     """Download PENDING (or SKIPPED/UNSUPPORTED) document files into ``file_contents``.
 
@@ -508,6 +509,12 @@ def process_data_source_pending_documents(
     hwp5txt). No OCR, no HWP Automation/COM. Each file uses a short DB
     transaction; credentials are never
     logged or echoed in error payloads.
+
+    ``reprocess_skipped`` — SKIPPED / UNSUPPORTED_EXTENSION rows whose extension
+    is now supported.
+
+    ``reprocess_hwp_no_extractable_text`` — only ``hwp`` rows with SKIPPED /
+    NO_EXTRACTABLE_TEXT (tiered re-extraction; does not affect COMPLETED HWP).
     """
     try:
         ext_set = parse_include_extensions(include_extensions)
@@ -519,6 +526,7 @@ def process_data_source_pending_documents(
             include_extensions=ext_set,
             dry_run=dry_run,
             reprocess_skipped=reprocess_skipped,
+            reprocess_hwp_no_extractable_text=reprocess_hwp_no_extractable_text,
             requested_by=admin.id,
         )
         body = payload if isinstance(payload, dict) else None
@@ -526,6 +534,7 @@ def process_data_source_pending_documents(
             "limit": limit,
             "dry_run": dry_run,
             "reprocess_skipped": reprocess_skipped,
+            "reprocess_hwp_no_extractable_text": reprocess_hwp_no_extractable_text,
             "include_extensions": (
                 ",".join(sorted(ext_set)) if ext_set else None
             ),

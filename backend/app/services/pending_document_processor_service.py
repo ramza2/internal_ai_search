@@ -59,6 +59,10 @@ SUCCESS_MESSAGE = "Pending document files processed"
 DRY_RUN_MESSAGE = "Dry run completed. No files were downloaded or updated."
 AUTH_FAILURE_MESSAGE = "WebDAV authentication failed"
 
+_PLANNED_PROCESS_PENDING = "PROCESS_PENDING"
+_PLANNED_REPROCESS_SUPPORTED_EXTENSION = "REPROCESS_SUPPORTED_EXTENSION"
+_PLANNED_REPROCESS_HWP_NO_EXTRACTABLE_TEXT = "REPROCESS_HWP_NO_EXTRACTABLE_TEXT"
+
 _ERR_UNSUPPORTED_EXT = "UNSUPPORTED_EXTENSION"
 _ERR_FILE_TOO_LARGE = "FILE_TOO_LARGE"
 _ERR_DOWNLOAD_FAILED = "DOWNLOAD_FAILED"
@@ -189,6 +193,43 @@ def _normalize_include_extensions_input(
     return frozenset(include_extensions)
 
 
+def _planned_action_for_row(row: dict[str, Any]) -> tuple[str, str | None]:
+    """Return (planned_action, reason) from file row analysis state."""
+    status = str(row.get("analysis_status") or "").upper()
+    err = (str(row.get("analysis_error_code") or "").strip().upper() or None)
+    ext = normalize_extension(row.get("extension"))
+    if status == "PENDING":
+        return _PLANNED_PROCESS_PENDING, None
+    if status == "SKIPPED" and err == _ERR_UNSUPPORTED_EXT:
+        return _PLANNED_REPROCESS_SUPPORTED_EXTENSION, err
+    if status == "SKIPPED" and err == _ERR_NO_EXTRACTABLE_TEXT and ext == "hwp":
+        return _PLANNED_REPROCESS_HWP_NO_EXTRACTABLE_TEXT, err
+    return "SKIP", err
+
+
+def _reprocess_option_warnings(
+    settings: Settings,
+    *,
+    allowed_ext: frozenset[str],
+    reprocess_hwp_no_extractable_text: bool,
+) -> list[str]:
+    warnings: list[str] = []
+    if not reprocess_hwp_no_extractable_text:
+        return warnings
+    if "hwp" not in allowed_ext:
+        warnings.append(
+            "reprocess_hwp_no_extractable_text=true but include_extensions does not "
+            "include hwp; no HWP rows will be selected."
+        )
+    strategy = (settings.hwp_extraction_strategy or "tiered").strip().lower()
+    if strategy in ("hwp5txt_only", "hwp5txt", "txt_only"):
+        warnings.append(
+            "HWP_EXTRACTION_STRATEGY=hwp5txt_only may limit benefit of reprocessing "
+            "SKIPPED/NO_EXTRACTABLE_TEXT HWP; tiered is recommended."
+        )
+    return warnings
+
+
 def _build_dry_run_payload(
     *,
     data_source_id: UUID,
@@ -196,18 +237,21 @@ def _build_dry_run_payload(
     rows: list[dict[str, Any]],
     max_file_size_bytes: int,
     allowed_ext: frozenset[str],
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     for prow in rows:
         parser = get_parser_for_extension(str(prow.get("extension") or ""))
-        skip_code, _ = _classify_pre_download(
+        planned, row_reason = _planned_action_for_row(prow)
+        skip_code, skip_msg = _classify_pre_download(
             prow, max_file_size_bytes=max_file_size_bytes, allowed_ext=allowed_ext
         )
         if skip_code is None:
             items.append(
                 _make_item(
                     prow,
-                    planned_action="PROCESS",
+                    planned_action=planned,
+                    reason=row_reason,
                     parser_name=_parser_label(parser),
                 )
             )
@@ -220,7 +264,7 @@ def _build_dry_run_payload(
                     parser_name=_parser_label(parser),
                 )
             )
-    return {
+    out: dict[str, Any] = {
         "status": "ok",
         "data_source_id": str(data_source_id),
         "name": name,
@@ -229,6 +273,9 @@ def _build_dry_run_payload(
         "message": DRY_RUN_MESSAGE,
         "items": items,
     }
+    if warnings:
+        out["warnings"] = warnings
+    return out
 
 
 def _commit_skip(
@@ -751,6 +798,7 @@ def run_process_pending_documents_core(
     max_file_size_bytes: int,
     include_extensions: frozenset[str] | str | None,
     reprocess_skipped: bool,
+    reprocess_hwp_no_extractable_text: bool = False,
     scan_job_id: UUID | None,
     requested_by: UUID | None = None,
     cancel_check: Callable[[], bool] | None = None,
@@ -797,6 +845,7 @@ def run_process_pending_documents_core(
         limit=eff_limit,
         document_extensions=allowed_ext,
         reprocess_skipped=reprocess_skipped,
+        reprocess_hwp_no_extractable_text=reprocess_hwp_no_extractable_text,
     )
     target_count = len(pending_rows)
 
@@ -804,7 +853,11 @@ def run_process_pending_documents_core(
     completed_count = 0
     skipped_count = 0
     failed_count = 0
-    warnings: list[str] = []
+    warnings: list[str] = _reprocess_option_warnings(
+        settings,
+        allowed_ext=allowed_ext,
+        reprocess_hwp_no_extractable_text=reprocess_hwp_no_extractable_text,
+    )
 
     timeout_seconds = float(settings.webdav_timeout_seconds)
 
@@ -1073,6 +1126,7 @@ def run_process_pending_documents(
     include_extensions: frozenset[str] | None,
     dry_run: bool,
     reprocess_skipped: bool,
+    reprocess_hwp_no_extractable_text: bool = False,
     requested_by: UUID | None = None,
 ) -> tuple[dict[str, Any], int]:
     ctx, err = _pending_document_webdav_context(settings, ds_id)
@@ -1089,6 +1143,12 @@ def run_process_pending_documents(
         limit=eff_limit,
         document_extensions=allowed_ext,
         reprocess_skipped=reprocess_skipped,
+        reprocess_hwp_no_extractable_text=reprocess_hwp_no_extractable_text,
+    )
+    opt_warnings = _reprocess_option_warnings(
+        settings,
+        allowed_ext=allowed_ext,
+        reprocess_hwp_no_extractable_text=reprocess_hwp_no_extractable_text,
     )
 
     if dry_run:
@@ -1099,6 +1159,7 @@ def run_process_pending_documents(
                 rows=pending_rows,
                 max_file_size_bytes=eff_size_cap,
                 allowed_ext=allowed_ext,
+                warnings=opt_warnings or None,
             ),
             200,
         )
@@ -1116,6 +1177,7 @@ def run_process_pending_documents(
         max_file_size_bytes=eff_size_cap,
         include_extensions=include_extensions,
         reprocess_skipped=reprocess_skipped,
+        reprocess_hwp_no_extractable_text=reprocess_hwp_no_extractable_text,
         scan_job_id=scan_job_id,
         requested_by=requested_by,
         preflight_ctx=ctx,

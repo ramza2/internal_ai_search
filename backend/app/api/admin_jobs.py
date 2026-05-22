@@ -278,6 +278,7 @@ def admin_enqueue_process_pending_documents_job(
         "max_file_size_bytes": int(body.max_file_size_bytes),
         "include_extensions": inc,
         "reprocess_skipped": bool(body.reprocess_skipped),
+        "reprocess_hwp_no_extractable_text": bool(body.reprocess_hwp_no_extractable_text),
         "created_for": "process_pending_documents_worker",
     }
     jid = scan_jobs_service.enqueue_scan_job(
@@ -301,6 +302,7 @@ def admin_enqueue_process_pending_documents_job(
             "max_file_size_bytes": body.max_file_size_bytes,
             "include_extensions": inc,
             "reprocess_skipped": body.reprocess_skipped,
+            "reprocess_hwp_no_extractable_text": body.reprocess_hwp_no_extractable_text,
         },
         error_message=None if ok else "Failed to enqueue process-pending-documents job",
     )

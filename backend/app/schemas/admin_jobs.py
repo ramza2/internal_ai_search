@@ -195,6 +195,7 @@ class AdminProcessPendingDocumentsJobRequest(BaseModel):
     max_file_size_bytes: int = Field(default=52_428_800, ge=1, le=256 * 1024 * 1024)
     include_extensions: str | None = Field(default=None, max_length=2000)
     reprocess_skipped: bool = False
+    reprocess_hwp_no_extractable_text: bool = False
     priority: int = 0
 
     @field_validator("include_extensions", mode="before")

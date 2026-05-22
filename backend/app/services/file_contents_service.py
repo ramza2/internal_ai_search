@@ -54,7 +54,9 @@ _FETCH_PENDING_DOCUMENTS_SQL = """
         filename,
         extension,
         size_bytes,
-        content_hash
+        content_hash,
+        analysis_status::text AS analysis_status,
+        analysis_error_code
     FROM files
     WHERE data_source_id = %s
       AND is_directory = FALSE
@@ -67,6 +69,12 @@ _FETCH_PENDING_DOCUMENTS_SQL = """
              %s
              AND analysis_status = 'SKIPPED'::analysis_status
              AND analysis_error_code = 'UNSUPPORTED_EXTENSION'
+         )
+         OR (
+             %s
+             AND lower(nullif(trim(extension), '')) = 'hwp'
+             AND analysis_status = 'SKIPPED'::analysis_status
+             AND analysis_error_code = 'NO_EXTRACTABLE_TEXT'
          )
       )
     ORDER BY updated_at ASC NULLS FIRST, remote_path ASC
@@ -181,17 +189,28 @@ def fetch_pending_document_files(
     limit: int,
     document_extensions: frozenset[str],
     reprocess_skipped: bool,
+    reprocess_hwp_no_extractable_text: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return PENDING (and optionally SKIPPED/UNSUPPORTED) document rows.
+    """Return PENDING (and optionally SKIPPED reprocess) document rows.
 
     ``document_extensions`` must be a non-empty normalized lowercase set
     (typically ``supported_document_extensions()`` intersected with the
     caller's ``include_extensions`` filter).
+
+    When ``reprocess_hwp_no_extractable_text`` is true, only ``hwp`` rows with
+    ``SKIPPED`` / ``NO_EXTRACTABLE_TEXT`` are added (still requires ``hwp`` in
+    ``document_extensions``).
     """
     if not document_extensions:
         return []
     exts = sorted(document_extensions)
-    params: list[Any] = [ds_id, exts, bool(reprocess_skipped), int(limit)]
+    params: list[Any] = [
+        ds_id,
+        exts,
+        bool(reprocess_skipped),
+        bool(reprocess_hwp_no_extractable_text),
+        int(limit),
+    ]
     with get_db_connection() as conn:
         conn.row_factory = dict_row
         with conn.cursor() as cur:

@@ -202,6 +202,9 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
         )
         inc_raw = _coerce_str(p.get("include_extensions"))
         reprocess_skipped = bool(p.get("reprocess_skipped", False))
+        reprocess_hwp_no_extractable_text = bool(
+            p.get("reprocess_hwp_no_extractable_text", False)
+        )
         wid = (settings.worker_id or "local-worker-1").strip()[:100]
 
         core = run_process_pending_documents_core(
@@ -211,6 +214,7 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
             max_file_size_bytes=max_bytes,
             include_extensions=inc_raw,
             reprocess_skipped=reprocess_skipped,
+            reprocess_hwp_no_extractable_text=reprocess_hwp_no_extractable_text,
             scan_job_id=job.id,
             requested_by=job.requested_by,
             cancel_check=lambda: scan_jobs_service.is_cancel_requested(job.id),

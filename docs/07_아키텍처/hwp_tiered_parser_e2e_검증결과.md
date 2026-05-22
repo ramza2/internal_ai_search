@@ -173,7 +173,7 @@ HWP_EXTRACTION_STRATEGY=hwp5txt_only
 | P1 | `E2E_ADMIN_PASSWORD` 정리 후 **HTTP API** 경로로 `hwp_e2e_api_check.py` 재현 |
 | P2 | preview / answer citation E2E 기록 |
 | P3 | `ParserResult.metadata` → DB/관리 UI 영속화 |
-| P4 | NO_EXTRACTABLE_TEXT HWP **선택 재처리** admin job |
+| P4 | ~~NO_EXTRACTABLE_TEXT HWP 선택 재처리~~ → [`hwp_skipped_재처리_e2e_검증결과.md`](./hwp_skipped_재처리_e2e_검증결과.md) (`reprocess_hwp_no_extractable_text`) |
 | P5 | AGPL 검토 · 대량 HWP 성능 테스트 |
 
 ---
