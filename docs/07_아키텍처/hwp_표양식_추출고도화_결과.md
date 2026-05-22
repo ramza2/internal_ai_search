@@ -122,7 +122,9 @@ normalized hit으로 `에이전틱 AI` / `에이전틱AI` 차이는 sample02 htm
 
 **판정:** **조건부 Go → tiered 1차 구현 완료** (기본 전략 `tiered`, 코드: `hwp_parser.py`, `hwp_html_flattener.py`, `hwp_quality.py`)
 
-**사유:** 양식형에서 txt NONE → html FULL. 공고문형은 txt도 쓸 만해 **html 우선 + txt fallback**이 3건과 맞음. 남은 것: compose E2E·metadata 영속화(별도)·AGPL.
+**사유:** 양식형에서 txt NONE → html FULL. 공고문형은 txt도 쓸 만해 **html 우선 + txt fallback**이 3건과 맞음.
+
+**Compose tiered E2E:** [`hwp_tiered_parser_e2e_검증결과.md`](./hwp_tiered_parser_e2e_검증결과.md) — **Go** (table-form COMPLETED·search OK). 남은 것: metadata 영속화·SKIPPED 일괄 재처리·AGPL.
 
 ---
 

@@ -32,7 +32,7 @@
 | 2 | **운영 Python 버전** 결정 (권장 **3.11 / 3.12**) | ☐ PoC에 3.14 사용 사례 있음 — 운영과 분리 |
 | 3 | **`requirements.txt` HWP 관련 pin** | ☐ TODO — §7 |
 | 4 | 이미지 내 `hwp5txt --help` · `hwp5html --help` 성공 | ☐ `docker-compose.dev.yml` 빌드 후 실행 |
-| 5 | `python tools/hwp_poc/check_hwp_runtime.py --json` → `status: ok` (전략 `tiered`) | ☐ `hwp5html_found`, `hwp5html_help_ok` 포함 |
+| 5 | `python tools/hwp_poc/check_hwp_runtime.py --json` → `status: ok` (전략 `tiered`) | ☑ Compose 2026-05-21 — [`hwp_tiered_parser_e2e_검증결과.md`](./hwp_tiered_parser_e2e_검증결과.md) |
 | 6 | HWP E2E **조건부 Go 이상** | ☑ compose 내부 DB: [`docker_compose_db_e2e_검증결과.md`](./docker_compose_db_e2e_검증결과.md); ☑ 호스트 외부 DB: [`hwp_e2e_검증결과_docker.md`](./hwp_e2e_검증결과_docker.md) (2026-05-21) |
 
 ---

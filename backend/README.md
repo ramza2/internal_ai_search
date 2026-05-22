@@ -666,6 +666,8 @@ python tools/hwp_poc/check_hwp_runtime.py --json
 
 `status: ok` — 전략에 필요한 CLI(`hwp5txt` / `hwp5html`) 발견·`--help` 성공, import 전부 통과. `tiered`에서 `hwp5html` 없으면 note와 함께 fail(또는 `hwp5txt_only`로 전략 변경).
 
+**Tiered E2E (Compose, 2026-05-21):** [`docs/07_아키텍처/hwp_tiered_parser_e2e_검증결과.md`](../docs/07_아키텍처/hwp_tiered_parser_e2e_검증결과.md) — 표·양식 PENDING HWP → **hwp5html** COMPLETED, search 키워드 회수 **Go**. 기존 SKIPPED/NO_EXTRACTABLE_TEXT 건은 **자동 재처리 안 됨** — 신규 sync 또는 관리자 재처리 필요.
+
 **Tiered E2E 스모크 (표·양식 HWP, 로컬/compose):**
 
 1. `python tools/hwp_poc/check_hwp_runtime.py --json` — `hwp5html_found`, `hwp5html_help_ok`, `hwp_extraction_strategy: tiered`
