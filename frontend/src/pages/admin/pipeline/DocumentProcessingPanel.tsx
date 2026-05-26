@@ -238,7 +238,7 @@ export function DocumentProcessingPanel({
     setEmbedBusy(true);
     try {
       const data = await dsApi.embedPendingChunks(dataSourceId, {
-        limit: 500,
+        limit: 0,
         batch_size: 32,
         reembed: false,
         dry_run: false,
