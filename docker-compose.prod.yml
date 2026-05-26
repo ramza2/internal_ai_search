@@ -4,9 +4,6 @@
 #   1. backend/.env.prod 작성 (backend/.env.example 참고)
 #   2. docker compose --env-file backend/.env.prod -f docker-compose.prod.yml up -d
 #
-# Worker 포함 실행:
-#   docker compose --env-file backend/.env.prod -f docker-compose.prod.yml --profile worker up -d
-#
 # DB 초기화 (볼륨 삭제):
 #   docker compose --env-file backend/.env.prod -f docker-compose.prod.yml down -v
 
@@ -68,8 +65,6 @@ services:
     restart: unless-stopped
 
   backend-worker:
-    profiles:
-      - worker
     build:
       context: .
       dockerfile: backend/Dockerfile
