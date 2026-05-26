@@ -2,10 +2,13 @@
 
 # Local secrets — never commit (use *.example as templates only)
 .env
+*.env.prod
 backend/.env
+backend/.env.prod
 frontend/.env
 !.env.example
 !**/.env.example
+!**/.env.prod.example
 
 # HWP PoC: local sample .hwp files and extracted text outputs (may contain sensitive content)
 tmp/hwp_poc/

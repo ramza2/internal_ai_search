@@ -1,0 +1,101 @@
+# internal-ai-search — 서버 배포용 (192.168.10.220)
+#
+# 사전 준비:
+#   1. backend/.env.prod 작성 (backend/.env.example 참고)
+#   2. docker compose --env-file backend/.env.prod -f docker-compose.prod.yml up -d
+#
+# Worker 포함 실행:
+#   docker compose --env-file backend/.env.prod -f docker-compose.prod.yml --profile worker up -d
+#
+# DB 초기화 (볼륨 삭제):
+#   docker compose --env-file backend/.env.prod -f docker-compose.prod.yml down -v
+
+services:
+  db:
+    image: pgvector/pgvector:pg18-bookworm
+    ports:
+      - "127.0.0.1:${DB_PUBLISH_PORT:-5434}:5432"
+    environment:
+      POSTGRES_DB: internal_ai_search
+      POSTGRES_USER: openlink
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in backend/.env.prod}
+    volumes:
+      - internal_ai_search_db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openlink -d internal_ai_search"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  db-migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - backend/.env.prod
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: python scripts/apply_migrations.py
+    restart: "no"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8100:8000"
+    env_file:
+      - backend/.env.prod
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      OLLAMA_BASE_URL: http://192.168.10.154:11434
+    depends_on:
+      db:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+
+  backend-worker:
+    profiles:
+      - worker
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - backend/.env.prod
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      OLLAMA_BASE_URL: http://192.168.10.154:11434
+      WORKER_ENABLED: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    command: python -m app.worker_main
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_DEV_PROXY_TARGET: http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  internal_ai_search_db_data:
