@@ -72,18 +72,18 @@ def default_pipeline_params() -> dict[str, Any]:
             "detect_deleted": True,
         },
         "process_text": {
-            "limit": 100,
+            "limit": 0,
             "max_file_size_bytes": SERVER_MAX_PROCESS_FILE_BYTES,
             "include_extensions": PROCESS_PENDING_TEXT_DEFAULT_EXTENSIONS,
         },
         "process_documents": {
-            "limit": 50,
+            "limit": 0,
             "max_file_size_bytes": SERVER_MAX_PROCESS_FILE_BYTES,
             "include_extensions": PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS,
             "reprocess_skipped": False,
         },
         "chunk": {
-            "limit": 100,
+            "limit": 0,
             "chunk_size": 1200,
             "chunk_overlap": 200,
             "min_chunk_size": 100,
@@ -91,7 +91,7 @@ def default_pipeline_params() -> dict[str, Any]:
             "include_extensions": None,
         },
         "embed": {
-            "limit": 500,
+            "limit": 0,
             "batch_size": 32,
             "include_extensions": None,
             "reembed": False,
@@ -192,7 +192,7 @@ def build_step_job_params(
             inc = PROCESS_PENDING_TEXT_DEFAULT_EXTENSIONS
         return {
             **meta,
-            "limit": _clamp_int(out.get("limit"), 100, lo=1, hi=5000),
+            "limit": _clamp_int(out.get("limit"), 0, lo=0, hi=5000),
             "max_file_size_bytes": _clamp_int(
                 out.get("max_file_size_bytes"),
                 SERVER_MAX_PROCESS_FILE_BYTES,
@@ -207,7 +207,7 @@ def build_step_job_params(
             inc = PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS
         return {
             **meta,
-            "limit": _clamp_int(out.get("limit"), 50, lo=1, hi=5000),
+            "limit": _clamp_int(out.get("limit"), 0, lo=0, hi=5000),
             "max_file_size_bytes": _clamp_int(
                 out.get("max_file_size_bytes"),
                 SERVER_MAX_PROCESS_FILE_BYTES,
@@ -224,7 +224,7 @@ def build_step_job_params(
             co = max(0, cs - 1)
         jp: dict[str, Any] = {
             **meta,
-            "limit": _clamp_int(out.get("limit"), 100, lo=1, hi=5000),
+            "limit": _clamp_int(out.get("limit"), 0, lo=0, hi=5000),
             "chunk_size": cs,
             "chunk_overlap": co,
             "min_chunk_size": _clamp_int(out.get("min_chunk_size"), 100, lo=1, hi=10_000),
@@ -236,7 +236,7 @@ def build_step_job_params(
     if step == scan_jobs_service.JOB_TYPE_EMBED_PENDING_CHUNKS:
         je: dict[str, Any] = {
             **meta,
-            "limit": _clamp_int(out.get("limit"), 500, lo=1, hi=10_000),
+            "limit": _clamp_int(out.get("limit"), 0, lo=0, hi=10_000),
             "batch_size": _clamp_int(out.get("batch_size"), 32, lo=1, hi=128),
             "reembed": bool(out.get("reembed", False)),
         }

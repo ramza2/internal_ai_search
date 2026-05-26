@@ -293,19 +293,19 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
   const [applyExclusions, setApplyExclusions] = useState(true);
   const [detectDeleted, setDetectDeleted] = useState(true);
 
-  const [textLimit, setTextLimit] = useState(100);
+  const [textLimit, setTextLimit] = useState(0);
   const [textUseServerMax, setTextUseServerMax] = useState(true);
   const [textMaxMb, setTextMaxMb] = useState(SERVER_MAX_FILE_MB);
   const [textIncludeExt, setTextIncludeExt] = useState("txt,md,py,java,sql,json,yml");
 
-  const [chunkLimit, setChunkLimit] = useState(100);
+  const [chunkLimit, setChunkLimit] = useState(0);
   const [chunkSize, setChunkSize] = useState(1200);
   const [chunkOverlap, setChunkOverlap] = useState(200);
   const [chunkMin, setChunkMin] = useState(100);
   const [chunkReprocess, setChunkReprocess] = useState(false);
   const [chunkIncludeExt, setChunkIncludeExt] = useState("");
 
-  const [embedLimit, setEmbedLimit] = useState(500);
+  const [embedLimit, setEmbedLimit] = useState(0);
   const [embedBatch, setEmbedBatch] = useState(32);
   const [embedReembed, setEmbedReembed] = useState(false);
   const [embedIncludeExt, setEmbedIncludeExt] = useState("");
@@ -471,7 +471,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
       }
       const r = await adminJobsApi.postAdminChunkCompletedTextJob({
         data_source_id: ds,
-        limit: Math.min(5000, Math.max(1, chunkLimit)),
+        limit: Math.min(5000, Math.max(0, chunkLimit)),
         chunk_size: cs,
         chunk_overlap: co,
         min_chunk_size: Math.max(1, Math.min(10_000, Number(chunkMin) || 100)),
@@ -483,7 +483,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
     }
     const r = await adminJobsApi.postAdminEmbedPendingChunksJob({
       data_source_id: ds,
-      limit: Math.min(10_000, Math.max(1, embedLimit)),
+      limit: Math.min(10_000, Math.max(0, embedLimit)),
       batch_size: Math.min(128, Math.max(1, embedBatch)),
       reembed: embedReembed,
       include_extensions: embedIncludeExt.trim() || undefined,
@@ -629,7 +629,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
             reprocess_skipped: Boolean(p.reprocess_skipped),
           },
           chunk: {
-            limit: Math.min(5000, Math.max(1, chunkLimit)),
+            limit: Math.min(5000, Math.max(0, chunkLimit)),
             chunk_size: cs,
             chunk_overlap: co,
             min_chunk_size: Math.max(1, Math.min(10_000, Number(chunkMin) || 100)),
@@ -637,7 +637,7 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
             include_extensions: chunkIncludeExt.trim() || undefined,
           },
           embed: {
-            limit: Math.min(10_000, Math.max(1, embedLimit)),
+            limit: Math.min(10_000, Math.max(0, embedLimit)),
             batch_size: Math.min(128, Math.max(1, embedBatch)),
             include_extensions: embedIncludeExt.trim() || undefined,
             reembed: embedReembed,
@@ -1541,15 +1541,15 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
             >
               <AdvancedSection title="고급 설정" summary="처리 건수·파일 크기·확장자">
               <div className="formGrid" style={{ maxWidth: 640 }}>
-                <FormField label="한 번에 처리할 파일 수">
+                <FormField label="처리할 파일 수" hint="0 = 전체">
                   <Select
                     value={String(textLimit)}
                     onChange={(e) => setTextLimit(Number(e.target.value))}
                     disabled={formDisabled}
                   >
-                    {[10, 20, 50, 100, 200, 500, 1000].map((n) => (
+                    {[0, 10, 20, 50, 100, 200, 500, 1000, 5000].map((n) => (
                       <option key={n} value={n}>
-                        {n}
+                        {n === 0 ? "전체" : n}
                       </option>
                     ))}
                   </Select>
@@ -1721,15 +1721,15 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
             >
               <AdvancedSection title="고급 설정" summary="단위 크기·겹침·재처리">
               <div className="formGrid" style={{ maxWidth: 640 }}>
-                <FormField label="한 번에 처리할 파일 수">
+                <FormField label="처리할 파일 수" hint="0 = 전체">
                   <Select
                     value={String(chunkLimit)}
                     onChange={(e) => setChunkLimit(Number(e.target.value))}
                     disabled={formDisabled}
                   >
-                    {[20, 50, 100, 200, 500, 1000].map((n) => (
+                    {[0, 20, 50, 100, 200, 500, 1000, 5000].map((n) => (
                       <option key={n} value={n}>
-                        {n}
+                        {n === 0 ? "전체" : n}
                       </option>
                     ))}
                   </Select>
@@ -1860,15 +1860,15 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
             >
               <AdvancedSection title="고급 설정" summary="배치 크기·재인덱싱·확장자">
               <div className="formGrid" style={{ maxWidth: 640 }}>
-                <FormField label="한 번에 처리할 단위 수">
+                <FormField label="처리할 단위 수" hint="0 = 전체">
                   <Select
                     value={String(embedLimit)}
                     onChange={(e) => setEmbedLimit(Number(e.target.value))}
                     disabled={formDisabled}
                   >
-                    {[100, 200, 500, 1000, 2000, 5000].map((n) => (
+                    {[0, 100, 200, 500, 1000, 2000, 5000, 10000].map((n) => (
                       <option key={n} value={n}>
-                        {n}
+                        {n === 0 ? "전체" : n}
                       </option>
                     ))}
                   </Select>

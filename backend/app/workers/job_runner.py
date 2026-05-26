@@ -155,7 +155,7 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
                 message="PROCESS_PENDING_TEXT job is missing data_source_id",
             )
         p = params or {}
-        limit = _coerce_int(p.get("limit"), 100, lo=1, hi=5000)
+        limit = _coerce_int(p.get("limit"), 0, lo=0, hi=5000)
         max_bytes = _coerce_int(
             p.get("max_file_size_bytes"),
             5_242_880,
@@ -193,7 +193,7 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
                 message="PROCESS_PENDING_DOCUMENTS job is missing data_source_id",
             )
         p = params or {}
-        limit = _coerce_int(p.get("limit"), 50, lo=1, hi=5000)
+        limit = _coerce_int(p.get("limit"), 0, lo=0, hi=5000)
         max_bytes = _coerce_int(
             p.get("max_file_size_bytes"),
             52_428_800,
@@ -240,7 +240,7 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
                 message="CHUNK_COMPLETED_TEXT job is missing data_source_id",
             )
         p = params or {}
-        limit = _coerce_int(p.get("limit"), 100, lo=1, hi=5000)
+        limit = _coerce_int(p.get("limit"), 0, lo=0, hi=5000)
         chunk_size = _coerce_int(p.get("chunk_size"), 1200, lo=200, hi=10_000)
         chunk_overlap = _coerce_int(p.get("chunk_overlap"), 200, lo=0, hi=9999)
         min_chunk_size = _coerce_int(p.get("min_chunk_size"), 100, lo=1, hi=10_000)
@@ -277,7 +277,7 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
                 message="EMBED_PENDING_CHUNKS job is missing data_source_id",
             )
         p = params or {}
-        limit = _coerce_int(p.get("limit"), 500, lo=1, hi=10_000)
+        limit = _coerce_int(p.get("limit"), 0, lo=0, hi=10_000)
         batch_size = _coerce_int(p.get("batch_size"), 32, lo=1, hi=128)
         reembed = bool(p.get("reembed", False))
         inc_raw = _coerce_str(p.get("include_extensions"))

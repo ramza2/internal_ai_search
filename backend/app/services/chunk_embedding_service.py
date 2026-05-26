@@ -59,7 +59,7 @@ from app.services.chunk_embedding_repository import (
 )
 from app.services.text_extraction_service import parse_include_extensions
 
-_LIMIT_MIN = 1
+_LIMIT_MIN = 0
 _LIMIT_MAX = 10_000
 _BATCH_MIN = 1
 _BATCH_MAX = 128

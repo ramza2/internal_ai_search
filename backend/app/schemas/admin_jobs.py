@@ -163,7 +163,7 @@ class AdminProcessPendingTextJobRequest(BaseModel):
     """Body for ``POST /api/admin/jobs/process-pending-text`` (worker queue)."""
 
     data_source_id: UUID
-    limit: int = Field(default=100, ge=1, le=5000)
+    limit: int = Field(default=0, ge=0, le=5000, description="0 = process all pending files")
     max_file_size_bytes: int = Field(default=5_242_880, ge=1, le=256 * 1024 * 1024)
     include_extensions: str | None = Field(default=None, max_length=2000)
     priority: int = 0
@@ -191,7 +191,7 @@ class AdminProcessPendingDocumentsJobRequest(BaseModel):
     """Body for ``POST /api/admin/jobs/process-pending-documents`` (worker queue)."""
 
     data_source_id: UUID
-    limit: int = Field(default=50, ge=1, le=5000)
+    limit: int = Field(default=0, ge=0, le=5000, description="0 = process all pending files")
     max_file_size_bytes: int = Field(default=52_428_800, ge=1, le=256 * 1024 * 1024)
     include_extensions: str | None = Field(default=None, max_length=2000)
     reprocess_skipped: bool = False
@@ -219,7 +219,7 @@ class AdminChunkCompletedTextJobRequest(BaseModel):
     """Body for ``POST /api/admin/jobs/chunk-completed-text`` (worker queue)."""
 
     data_source_id: UUID
-    limit: int = Field(default=100, ge=1, le=5000)
+    limit: int = Field(default=0, ge=0, le=5000, description="0 = process all completed files")
     chunk_size: int = Field(default=1200, ge=200, le=10_000)
     chunk_overlap: int = Field(default=200, ge=0, le=9999)
     min_chunk_size: int = Field(default=100, ge=1, le=10_000)
@@ -253,7 +253,7 @@ class AdminEmbedPendingChunksJobRequest(BaseModel):
     """Body for ``POST /api/admin/jobs/embed-pending-chunks`` (worker queue)."""
 
     data_source_id: UUID
-    limit: int = Field(default=500, ge=1, le=10_000)
+    limit: int = Field(default=0, ge=0, le=10_000, description="0 = embed all pending chunks")
     batch_size: int = Field(default=32, ge=1, le=128)
     include_extensions: str | None = Field(default=None, max_length=2000)
     reembed: bool = False

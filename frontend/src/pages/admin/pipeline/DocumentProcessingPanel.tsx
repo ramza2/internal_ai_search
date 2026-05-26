@@ -24,7 +24,7 @@ import { formatInt } from "@/utils/format";
 import styles from "../DocumentProcessModal.module.css";
 import { HwpSkippedReprocessSection } from "./HwpSkippedReprocessSection";
 
-const LIMIT_OPTIONS = [10, 20, 50, 100, 500] as const;
+const LIMIT_OPTIONS = [0, 10, 20, 50, 100, 500, 1000, 5000] as const;
 
 const MB_OPTIONS: { label: string; bytes: number }[] = [
   { label: "10 MB", bytes: 10 * 1024 * 1024 },
@@ -131,7 +131,7 @@ export function DocumentProcessingPanel({
   suppressDocumentRealRun = false,
   defaultMaxFileBytes = 52_428_800,
 }: DocumentProcessingPanelProps) {
-  const [limit, setLimit] = useState(50);
+  const [limit, setLimit] = useState(0);
   const [maxBytes, setMaxBytes] = useState(defaultMaxFileBytes);
   const [extSelected, setExtSelected] = useState<Record<DocExtKey, boolean>>(() => {
     const o = {} as Record<DocExtKey, boolean>;
@@ -278,11 +278,11 @@ export function DocumentProcessingPanel({
       )}
 
       <div className="formGrid" style={{ maxWidth: 560, marginTop: "1rem" }}>
-        <FormField label="처리 개수 (limit)">
+        <FormField label="처리 개수" hint="0 = 전체 처리">
           <Select value={String(limit)} onChange={(e) => setLimit(Number(e.target.value))}>
             {LIMIT_OPTIONS.map((n) => (
               <option key={n} value={n}>
-                {n}
+                {n === 0 ? "전체" : n}
               </option>
             ))}
           </Select>

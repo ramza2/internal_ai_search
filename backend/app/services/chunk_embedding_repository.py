@@ -66,9 +66,8 @@ _FETCH_FILTER_EXTENSION = (
 
 _FETCH_FILTER_FILE_ID = " AND f.id = %s"
 
-_FETCH_TAIL_SQL = """
+_FETCH_ORDER_SQL = """
     ORDER BY f.remote_path ASC, dc.chunk_index ASC
-    LIMIT %s
 """
 
 
@@ -103,8 +102,10 @@ def fetch_pending_chunks_for_embedding(
     if file_id is not None:
         sql += _FETCH_FILTER_FILE_ID
         params.append(file_id)
-    sql += _FETCH_TAIL_SQL
-    params.append(int(limit))
+    sql += _FETCH_ORDER_SQL
+    if limit > 0:
+        sql += "    LIMIT %s\n"
+        params.append(int(limit))
 
     with get_db_connection() as conn:
         conn.row_factory = dict_row

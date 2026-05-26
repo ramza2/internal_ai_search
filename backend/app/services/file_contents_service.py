@@ -42,9 +42,8 @@ _FETCH_PENDING_EXT_FILTER = (
     " AND lower(nullif(trim(extension), '')) = ANY(%s)"
 )
 
-_FETCH_PENDING_TAIL = """
+_FETCH_PENDING_ORDER = """
     ORDER BY updated_at ASC NULLS FIRST, remote_path ASC
-    LIMIT %s
 """
 
 _FETCH_PENDING_DOCUMENTS_SQL = """
@@ -78,7 +77,6 @@ _FETCH_PENDING_DOCUMENTS_SQL = """
          )
       )
     ORDER BY updated_at ASC NULLS FIRST, remote_path ASC
-    LIMIT %s
 """
 
 _FETCH_ONLY_HWP_NO_EXTRACTABLE_TEXT_SQL = """
@@ -100,7 +98,6 @@ _FETCH_ONLY_HWP_NO_EXTRACTABLE_TEXT_SQL = """
       AND analysis_status = 'SKIPPED'::analysis_status
       AND analysis_error_code = 'NO_EXTRACTABLE_TEXT'
     ORDER BY updated_at ASC NULLS FIRST, remote_path ASC
-    LIMIT %s
 """
 
 
@@ -194,8 +191,10 @@ def fetch_pending_files(
     if include_extensions:
         sql += _FETCH_PENDING_EXT_FILTER
         params.append(sorted(include_extensions))
-    sql += _FETCH_PENDING_TAIL
-    params.append(int(limit))
+    sql += _FETCH_PENDING_ORDER
+    if limit > 0:
+        sql += "    LIMIT %s\n"
+        params.append(int(limit))
 
     with get_db_connection() as conn:
         conn.row_factory = dict_row
@@ -229,8 +228,11 @@ def fetch_pending_document_files(
     if only_reprocess_hwp_no_extractable_text:
         if not document_extensions or "hwp" not in document_extensions:
             return []
-        params: list[Any] = [ds_id, int(limit)]
+        params: list[Any] = [ds_id]
         sql = _FETCH_ONLY_HWP_NO_EXTRACTABLE_TEXT_SQL
+        if limit > 0:
+            sql += "    LIMIT %s\n"
+            params.append(int(limit))
     else:
         if not document_extensions:
             return []
@@ -240,9 +242,11 @@ def fetch_pending_document_files(
             exts,
             bool(reprocess_skipped),
             bool(reprocess_hwp_no_extractable_text),
-            int(limit),
         ]
         sql = _FETCH_PENDING_DOCUMENTS_SQL
+        if limit > 0:
+            sql += "    LIMIT %s\n"
+            params.append(int(limit))
     with get_db_connection() as conn:
         conn.row_factory = dict_row
         with conn.cursor() as cur:

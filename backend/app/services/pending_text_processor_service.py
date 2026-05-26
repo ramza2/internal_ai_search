@@ -61,7 +61,8 @@ from app.webdav.download import download_file_bytes
 
 # Defensive ceilings: the synchronous route caps ``limit`` at 1000; worker
 # admin enqueue allows up to 5000. Service clamps to ``_LIMIT_MAX``.
-_LIMIT_MIN = 1
+# limit=0 means "process all pending files" (no SQL LIMIT clause).
+_LIMIT_MIN = 0
 _LIMIT_MAX = 5000
 _SIZE_MIN = 1
 _SIZE_MAX = 256 * 1024 * 1024  # 256 MB upper bound for this milestone

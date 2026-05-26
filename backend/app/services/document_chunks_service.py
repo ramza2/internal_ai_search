@@ -65,9 +65,8 @@ _FETCH_SKIP_ALREADY_CHUNKED = """
     )
 """
 
-_FETCH_TAIL = """
+_FETCH_ORDER = """
     ORDER BY f.updated_at ASC NULLS FIRST, f.remote_path ASC
-    LIMIT %s
 """
 
 
@@ -128,8 +127,10 @@ def fetch_completed_for_chunking(
         params.append(sorted(include_extensions))
     if not reprocess:
         sql += _FETCH_SKIP_ALREADY_CHUNKED
-    sql += _FETCH_TAIL
-    params.append(int(limit))
+    sql += _FETCH_ORDER
+    if limit > 0:
+        sql += "    LIMIT %s\n"
+        params.append(int(limit))
 
     with get_db_connection() as conn:
         conn.row_factory = dict_row

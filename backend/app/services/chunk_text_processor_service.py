@@ -58,7 +58,7 @@ from app.services.document_chunks_service import (
 )
 from app.services.text_extraction_service import parse_include_extensions
 
-_LIMIT_MIN = 1
+_LIMIT_MIN = 0
 _LIMIT_MAX = 5000
 
 _SUCCESS_MESSAGE = "Completed text files chunked successfully"

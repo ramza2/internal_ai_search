@@ -50,7 +50,7 @@ from app.services.text_extraction_service import (
 )
 from app.webdav.download import download_file_bytes
 
-_LIMIT_MIN = 1
+_LIMIT_MIN = 0
 _LIMIT_MAX = 5000
 _SIZE_MIN = 1
 _SIZE_MAX = 256 * 1024 * 1024
