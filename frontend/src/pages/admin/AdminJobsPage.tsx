@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { getApiErrorMessage } from "@/api/httpClient";
 import * as adminJobsApi from "@/api/adminJobsApi";
 import { EmptyState } from "@/components/EmptyState";
@@ -14,6 +14,7 @@ import {
   Input,
   PageHeader,
   PaginationBar,
+  ProgressBar,
   SectionCard,
   Select,
 } from "@/components/ui";
@@ -26,7 +27,7 @@ import type {
   AdminJobFailure,
   AdminJobFailuresResponse,
 } from "@/types/adminJobs";
-import { formatDateTime, formatDuration } from "@/utils/format";
+import { formatDateTime, formatDuration, formatElapsed, formatRelativeTime } from "@/utils/format";
 import {
   getJobStatusBadgeVariant,
   getJobStatusLabel,
@@ -134,6 +135,24 @@ const RETRY_CONFIRM_MSG =
   "이 작업과 동일한 파라미터로 새 백그라운드 Job을 생성합니다. 계속하시겠습니까?";
 const RETRY_FORCE_CONFIRM_MSG = "재시도 한도를 초과했습니다. 강제로 새 Job을 생성하시겠습니까?";
 
+const AUTO_POLL_INTERVAL = 5_000;
+
+function isJobActive(status: string | undefined): boolean {
+  const u = (status || "").toUpperCase();
+  return u === "RUNNING" || u === "PENDING" || u === "CANCELLING";
+}
+
+function hasActiveJobs(jobs: AdminJob[]): boolean {
+  return jobs.some((j) => isJobActive(j.status));
+}
+
+function shortFilePath(p: string | null | undefined, max = 40): string {
+  if (!p) return "";
+  const s = p.replace(/\\/g, "/");
+  if (s.length <= max) return s;
+  return `…${s.slice(-(max - 1))}`;
+}
+
 export function AdminJobsPage() {
   const { items: dataSources } = useDataSources(true);
   const [draft, setDraft] = useState<Draft>(emptyDraft);
@@ -147,6 +166,7 @@ export function AdminJobsPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [listBusy, setListBusy] = useState(false);
+  const [autoPoll, setAutoPoll] = useState(false);
 
   const [modalJobId, setModalJobId] = useState<string | null>(null);
   const [detail, setDetail] = useState<AdminJobDetailResponse | null>(null);
@@ -203,7 +223,53 @@ export function AdminJobsPage() {
     void fetchList();
   }, [fetchList]);
 
-    function onSearch() {
+  // Auto-poll: refresh list every 5s when enabled and active jobs exist
+  const fetchListRef = useRef(fetchList);
+  fetchListRef.current = fetchList;
+  useEffect(() => {
+    if (!autoPoll) return;
+    const id = window.setInterval(() => {
+      void fetchListRef.current();
+    }, AUTO_POLL_INTERVAL);
+    return () => window.clearInterval(id);
+  }, [autoPoll]);
+
+  // Auto-stop polling when no active jobs remain
+  useEffect(() => {
+    if (autoPoll && items.length > 0 && !hasActiveJobs(items)) {
+      setAutoPoll(false);
+    }
+  }, [autoPoll, items]);
+
+  // Detail modal auto-poll
+  const modalJobIdRef = useRef(modalJobId);
+  modalJobIdRef.current = modalJobId;
+  const [detailAutoPoll, setDetailAutoPoll] = useState(false);
+  useEffect(() => {
+    if (!detailAutoPoll || !modalJobId) return;
+    const id = window.setInterval(() => {
+      const jid = modalJobIdRef.current;
+      if (jid) void reloadDetailFor(jid);
+    }, AUTO_POLL_INTERVAL);
+    return () => window.clearInterval(id);
+  }, [detailAutoPoll, modalJobId]);
+
+  useEffect(() => {
+    if (detailAutoPoll && detail && !isJobActive(detail.job.status)) {
+      setDetailAutoPoll(false);
+    }
+  }, [detailAutoPoll, detail]);
+
+  // Elapsed timer tick (re-renders every second when detail modal is open and job is RUNNING)
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!modalJobId || !detail) return;
+    if (!isJobActive(detail.job.status)) return;
+    const id = window.setInterval(() => setTick((t) => t + 1), 1_000);
+    return () => window.clearInterval(id);
+  }, [modalJobId, detail]);
+
+  function onSearch() {
     setApplied({ ...draft });
     setOffset(0);
   }
@@ -226,9 +292,11 @@ export function AdminJobsPage() {
     setFailures(null);
     setFailuresErr("");
     setDetailBusy(true);
+    setDetailAutoPoll(false);
     try {
       const d = await adminJobsApi.getAdminJob(jobId);
       setDetail(d);
+      if (isJobActive(d.job.status)) setDetailAutoPoll(true);
       if (d.job.job_type?.toUpperCase() === "PIPELINE") {
         setJobChildrenBusy(true);
         try {
@@ -268,6 +336,7 @@ export function AdminJobsPage() {
     setFailures(null);
     setFailuresErr("");
     setRetryNewJobId(null);
+    setDetailAutoPoll(false);
   }
 
   async function reloadDetailFor(jobId: string) {
@@ -476,9 +545,16 @@ export function AdminJobsPage() {
             초기화
           </Button>
         </FilterBar>
-        <p className="muted" style={{ margin: "0.5rem 0 0" }}>
-          총 <strong>{total.toLocaleString("ko-KR")}</strong>건{listBusy ? " · 불러오는 중…" : ""}
-        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.75rem", margin: "0.5rem 0 0" }}>
+          <p className="muted" style={{ margin: 0 }}>
+            총 <strong>{total.toLocaleString("ko-KR")}</strong>건{listBusy ? " · 불러오는 중…" : ""}
+          </p>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.82rem" }}>
+            <input type="checkbox" checked={autoPoll} onChange={(e) => setAutoPoll(e.target.checked)} />
+            자동 새로고침 (5초)
+            {autoPoll && <span style={{ display: "inline-block", animation: "spin 1s linear infinite", fontSize: "0.75rem" }}>⟳</span>}
+          </label>
+        </div>
         <PaginationBar offset={offset} limit={limit} total={total} onOffsetChange={setOffset} disabled={listBusy} />
       </SectionCard>
 
@@ -539,27 +615,8 @@ export function AdminJobsPage() {
                     <td>
                       {j.job_type?.toUpperCase() === "PIPELINE" ? (
                         <div>
-                          <div
-                            style={{
-                              height: 6,
-                              borderRadius: 3,
-                              background: "var(--color-border, #e4e4e7)",
-                              overflow: "hidden",
-                              marginBottom: "0.25rem",
-                              maxWidth: "8rem",
-                            }}
-                            aria-hidden
-                          >
-                            <div
-                              style={{
-                                height: "100%",
-                                width: `${Math.min(100, Math.max(0, Number(j.progress_percent) || 0))}%`,
-                                background: "var(--color-primary, #2563eb)",
-                              }}
-                            />
-                          </div>
-                          <div>{j.progress_percent != null ? `${j.progress_percent}%` : "—"}</div>
-                          <div className="muted" style={{ fontSize: "0.72rem", lineHeight: 1.35 }}>
+                          <ProgressBar percent={j.progress_percent} showLabel />
+                          <div className="muted" style={{ fontSize: "0.72rem", lineHeight: 1.35, marginTop: "0.2rem" }}>
                             단계 {(j.completed_files ?? 0) + (j.skipped_files ?? 0)}/{j.total_files || "—"} 완료
                           </div>
                           <div className="muted" style={{ fontSize: "0.72rem" }}>
@@ -567,12 +624,19 @@ export function AdminJobsPage() {
                           </div>
                         </div>
                       ) : (
-                        <>
-                          {j.progress_percent != null ? `${j.progress_percent}%` : "—"}
-                          <div className="muted" style={{ fontSize: "0.75rem" }}>
+                        <div>
+                          {(j.total_files > 0 || j.progress_percent != null) && (
+                            <ProgressBar percent={j.progress_percent} showLabel />
+                          )}
+                          <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.15rem" }}>
                             {j.processed_files}/{j.total_files}
                           </div>
-                        </>
+                          {isJobActive(j.status) && j.current_file_path && (
+                            <div className="muted" style={{ fontSize: "0.68rem", maxWidth: "10rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={j.current_file_path}>
+                              {shortFilePath(j.current_file_path)}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </td>
                     <td className="snippet" style={{ maxWidth: "12rem", fontSize: "0.8rem" }}>
@@ -728,7 +792,38 @@ export function AdminJobsPage() {
                       ({detail.job.job_type})
                     </span>{" "}
                     · 실패 행 <strong>{detail.failures_count}</strong>건
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", marginLeft: "0.75rem", fontSize: "0.82rem" }}>
+                      <input type="checkbox" checked={detailAutoPoll} onChange={(e) => setDetailAutoPoll(e.target.checked)} />
+                      자동 새로고침
+                      {detailAutoPoll && <span style={{ display: "inline-block", animation: "spin 1s linear infinite", fontSize: "0.75rem" }}>⟳</span>}
+                    </label>
                   </div>
+
+                  {/* Progress section */}
+                  {(detail.job.total_files > 0 || detail.job.progress_percent != null) && detail.job.job_type?.toUpperCase() !== "PIPELINE" && (
+                    <div style={{ marginBottom: "0.75rem", padding: "0.65rem 0.75rem", borderRadius: "var(--radius-sm, 8px)", background: "var(--color-surface-elevated, #f4f4f5)" }}>
+                      <ProgressBar percent={detail.job.progress_percent} height={8} maxWidth="100%" showLabel animate />
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1.25rem", marginTop: "0.5rem", fontSize: "0.82rem" }}>
+                        <span>완료 <strong>{detail.job.completed_files}</strong></span>
+                        <span>처리 <strong>{detail.job.processed_files}</strong> / 전체 <strong>{detail.job.total_files}</strong></span>
+                        {detail.job.failed_files > 0 && <span style={{ color: "var(--color-danger, #dc2626)" }}>실패 <strong>{detail.job.failed_files}</strong></span>}
+                        {detail.job.skipped_files > 0 && <span>건너뜀 <strong>{detail.job.skipped_files}</strong></span>}
+                        {detail.job.deleted_files > 0 && <span>삭제 <strong>{detail.job.deleted_files}</strong></span>}
+                      </div>
+                      {isJobActive(detail.job.status) && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1.25rem", marginTop: "0.35rem", fontSize: "0.78rem" }} className="muted">
+                          <span>경과 시간: <strong>{formatElapsed(detail.job.started_at)}</strong></span>
+                          <span>heartbeat: <strong>{formatRelativeTime(detail.job.heartbeat_at)}</strong></span>
+                        </div>
+                      )}
+                      {isJobActive(detail.job.status) && detail.job.current_file_path && (
+                        <div className="muted" style={{ marginTop: "0.35rem", fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={detail.job.current_file_path}>
+                          현재 파일: {detail.job.current_file_path}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <dl style={{ display: "grid", gridTemplateColumns: "10rem 1fr", gap: "0.35rem 0.75rem", fontSize: "0.875rem" }}>
                     <dt className="muted">요청자</dt>
                     <dd style={{ margin: 0 }}>
@@ -756,6 +851,11 @@ export function AdminJobsPage() {
                     <dt className="muted">시작 / 종료</dt>
                     <dd style={{ margin: 0 }}>
                       {formatDateTime(detail.job.started_at)} — {formatDateTime(detail.job.finished_at)}
+                      {isJobActive(detail.job.status) && detail.job.started_at && (
+                        <span className="muted" style={{ marginLeft: "0.5rem", fontSize: "0.8rem" }}>
+                          (경과 {formatElapsed(detail.job.started_at)})
+                        </span>
+                      )}
                     </dd>
                     <dt className="muted">소요</dt>
                     <dd style={{ margin: 0 }}>

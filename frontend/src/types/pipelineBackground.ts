@@ -9,6 +9,12 @@ export type BackgroundPipelineStepState = {
   jobType?: string;
   status?: string;
   progressPercent?: number | null;
+  totalFiles?: number;
+  processedFiles?: number;
+  completedFiles?: number;
+  failedFiles?: number;
+  skippedFiles?: number;
+  currentFilePath?: string | null;
   workerId?: string | null;
   heartbeatAt?: string | null;
   startedAt?: string | null;

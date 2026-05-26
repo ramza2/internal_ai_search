@@ -13,6 +13,7 @@ import {
   FormField,
   InfoBox,
   Input,
+  ProgressBar,
   SectionCard,
   Select,
 } from "@/components/ui";
@@ -39,7 +40,7 @@ import type {
   ExecutionMode,
   PipelineBackgroundStepId,
 } from "@/types/pipelineBackground";
-import { formatDateTime, formatDuration, formatInt } from "@/utils/format";
+import { formatDateTime, formatDuration, formatInt, formatRelativeTime } from "@/utils/format";
 import { getJobStatusBadgeVariant, getJobStatusLabel, getJobTypeLabel } from "@/utils/jobLabels";
 import {
   DocumentProcessingPanel,
@@ -380,6 +381,12 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
         jobType: job.job_type,
         status: job.status,
         progressPercent: job.progress_percent,
+        totalFiles: job.total_files,
+        processedFiles: job.processed_files,
+        completedFiles: job.completed_files,
+        failedFiles: job.failed_files,
+        skippedFiles: job.skipped_files,
+        currentFilePath: job.current_file_path,
         workerId: job.worker_id ?? null,
         heartbeatAt: job.heartbeat_at,
         startedAt: job.started_at,
@@ -2159,21 +2166,34 @@ function BackgroundJobSection({
             )}
             {step.status && <Badge variant={getJobStatusBadgeVariant(step.status)}>{step.status}</Badge>}
           </div>
+          {((step.totalFiles ?? 0) > 0 || step.progressPercent != null) && (
+            <div style={{ marginTop: "0.35rem" }}>
+              <ProgressBar percent={step.progressPercent} height={6} maxWidth="100%" showLabel animate />
+              <div className="muted" style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem 1rem", marginTop: "0.25rem", fontSize: "0.75rem" }}>
+                <span>처리 {step.processedFiles ?? 0}/{step.totalFiles ?? 0}</span>
+                <span>완료 {step.completedFiles ?? 0}</span>
+                {(step.failedFiles ?? 0) > 0 && <span style={{ color: "var(--color-danger, #dc2626)" }}>실패 {step.failedFiles}</span>}
+                {(step.skippedFiles ?? 0) > 0 && <span>건너뜀 {step.skippedFiles}</span>}
+              </div>
+              {st === "RUNNING" && step.currentFilePath && (
+                <div className="muted" style={{ marginTop: "0.2rem", fontSize: "0.72rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={step.currentFilePath}>
+                  현재 파일: {step.currentFilePath}
+                </div>
+              )}
+            </div>
+          )}
           <div className={styles.bgJobMeta}>
             <div>
-              <span className="muted">progress_percent</span> {step.progressPercent != null ? `${step.progressPercent}%` : "—"}
+              <span className="muted">heartbeat</span> {step.heartbeatAt ? formatRelativeTime(step.heartbeatAt) : "—"}
             </div>
             <div>
-              <span className="muted">worker_id</span> {step.workerId ?? "—"}
+              <span className="muted">시작</span> {step.startedAt ? formatDateTime(step.startedAt) : "—"}
             </div>
             <div>
-              <span className="muted">heartbeat_at</span> {step.heartbeatAt ? formatDateTime(step.heartbeatAt) : "—"}
+              <span className="muted">종료</span> {step.finishedAt ? formatDateTime(step.finishedAt) : "—"}
             </div>
             <div>
-              <span className="muted">started_at</span> {step.startedAt ? formatDateTime(step.startedAt) : "—"}
-            </div>
-            <div>
-              <span className="muted">finished_at</span> {step.finishedAt ? formatDateTime(step.finishedAt) : "—"}
+              <span className="muted">worker</span> {step.workerId ?? "—"}
             </div>
           </div>
           {step.errorMessage ? <ErrorMessage message={step.errorMessage} /> : null}

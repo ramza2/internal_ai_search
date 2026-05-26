@@ -1,0 +1,28 @@
+.wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.track {
+  border-radius: 999px;
+  background: var(--color-border, #e4e4e7);
+  overflow: hidden;
+  width: 100%;
+}
+
+.fill {
+  height: 100%;
+  background: var(--color-primary, #2563eb);
+  border-radius: inherit;
+}
+
+.animate {
+  transition: width 0.4s ease;
+}
+
+.label {
+  font-size: 0.78rem;
+  color: var(--color-text-muted, #71717a);
+  white-space: nowrap;
+}

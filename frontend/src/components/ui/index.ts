@@ -16,6 +16,7 @@ export { Input } from "./Input";
 export type { InputProps } from "./Input";
 export { PageHeader } from "./PageHeader";
 export { PaginationBar } from "./PaginationBar";
+export { ProgressBar } from "./ProgressBar";
 export { SectionCard } from "./SectionCard";
 export { Select } from "./Select";
 export type { SelectProps } from "./Select";
