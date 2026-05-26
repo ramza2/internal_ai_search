@@ -625,12 +625,22 @@ export function AdminJobsPage() {
                         </div>
                       ) : (
                         <div>
-                          {(j.total_files > 0 || j.progress_percent != null) && (
-                            <ProgressBar percent={j.progress_percent} showLabel />
+                          {j.total_files > 0 ? (
+                            <>
+                              <ProgressBar percent={j.progress_percent} showLabel />
+                              <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.15rem" }}>
+                                {j.processed_files}/{j.total_files}
+                              </div>
+                            </>
+                          ) : isJobActive(j.status) ? (
+                            <div className="muted" style={{ fontSize: "0.72rem" }}>
+                              {j.processed_files > 0 ? `${j.processed_files.toLocaleString("ko-KR")}건 처리 중…` : "준비 중…"}
+                            </div>
+                          ) : (
+                            <div className="muted" style={{ fontSize: "0.72rem" }}>
+                              {j.processed_files}/{j.total_files}
+                            </div>
                           )}
-                          <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.15rem" }}>
-                            {j.processed_files}/{j.total_files}
-                          </div>
                           {isJobActive(j.status) && j.current_file_path && (
                             <div className="muted" style={{ fontSize: "0.68rem", maxWidth: "10rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={j.current_file_path}>
                               {shortFilePath(j.current_file_path)}
@@ -800,12 +810,18 @@ export function AdminJobsPage() {
                   </div>
 
                   {/* Progress section */}
-                  {(detail.job.total_files > 0 || detail.job.progress_percent != null) && detail.job.job_type?.toUpperCase() !== "PIPELINE" && (
+                  {detail.job.job_type?.toUpperCase() !== "PIPELINE" && (isJobActive(detail.job.status) || detail.job.total_files > 0 || detail.job.progress_percent != null) && (
                     <div style={{ marginBottom: "0.75rem", padding: "0.65rem 0.75rem", borderRadius: "var(--radius-sm, 8px)", background: "var(--color-surface-elevated, #f4f4f5)" }}>
-                      <ProgressBar percent={detail.job.progress_percent} height={8} maxWidth="100%" showLabel animate />
+                      {detail.job.total_files > 0 ? (
+                        <ProgressBar percent={detail.job.progress_percent} height={8} maxWidth="100%" showLabel animate />
+                      ) : isJobActive(detail.job.status) ? (
+                        <div className="muted" style={{ fontSize: "0.82rem" }}>
+                          {detail.job.processed_files > 0 ? `${detail.job.processed_files.toLocaleString("ko-KR")}건 처리 중…` : "준비 중…"}
+                        </div>
+                      ) : null}
                       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1.25rem", marginTop: "0.5rem", fontSize: "0.82rem" }}>
                         <span>완료 <strong>{detail.job.completed_files}</strong></span>
-                        <span>처리 <strong>{detail.job.processed_files}</strong> / 전체 <strong>{detail.job.total_files}</strong></span>
+                        <span>처리 <strong>{detail.job.processed_files}</strong>{detail.job.total_files > 0 ? <> / 전체 <strong>{detail.job.total_files}</strong></> : null}</span>
                         {detail.job.failed_files > 0 && <span style={{ color: "var(--color-danger, #dc2626)" }}>실패 <strong>{detail.job.failed_files}</strong></span>}
                         {detail.job.skipped_files > 0 && <span>건너뜀 <strong>{detail.job.skipped_files}</strong></span>}
                         {detail.job.deleted_files > 0 && <span>삭제 <strong>{detail.job.deleted_files}</strong></span>}
