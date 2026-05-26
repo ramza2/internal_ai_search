@@ -144,17 +144,87 @@ python tools/hwp_poc/hwp_reprocess_api_e2e_verify.py \
 
 ---
 
-## 12. 후속 TODO
+## 12. HTTP 재처리 전용 모드 검증 (`only_reprocess_hwp_no_extractable_text`)
 
-| 우선순위 | 항목 |
-|----------|------|
-| P1 | `E2E_ADMIN_PASSWORD` 설정 후 `hwp_reprocess_api_e2e_verify.py`로 HTTP search·preview·answer 기록 |
-| P2 | PENDING 대량 큐 앞에서 SKIPPED만 재처리 시 운영 가이드(limit·큐 소진·UI file 선택은 후속) |
-| P3 | COMPLETED HWP 재추출·기존 chunk 교체 정책 (별도 단계) |
+### 12.1 도입 배경
+
+| 문제 | 내용 |
+|------|------|
+| 기존 HTTP E2E (`reprocess_hwp_no_extractable_text` + `limit=1`) | **PENDING** HWP(`7f0ae2e5-...`)가 먼저 선택, SKIPPED 재처리 미검증 |
+| 원인 | 쿼리가 PENDING ∪ SKIPPED 재처리, `updated_at ASC` 정렬 |
+| 해결 | **`only_reprocess_hwp_no_extractable_text=true`** — PENDING 제외, SKIPPED/NO_EXTRACTABLE_TEXT HWP만 |
+
+### 12.2 옵션 차이 (운영)
+
+| 옵션 | PENDING | SKIPPED HWP NO_TEXT |
+|------|---------|---------------------|
+| `reprocess_hwp_no_extractable_text=true` | 포함 | 추가 포함 |
+| `only_reprocess_hwp_no_extractable_text=true` | **제외** | **만** |
+
+dry_run `planned_action`: **`REPROCESS_HWP_NO_EXTRACTABLE_TEXT_ONLY`**
+
+### 12.3 HTTP E2E 실행
+
+```bash
+python tools/hwp_poc/hwp_reprocess_api_e2e_verify.py \
+  --base-url http://localhost:8000 \
+  --data-source-id cd148eec-6d05-4486-b0b4-ebecebb3860a \
+  --only-reprocess-hwp-no-extractable-text \
+  --limit 1 \
+  --keyword "관리번호"
+```
+
+**전제:** `E2E_ADMIN_PASSWORD` 설정, tiered 전략, SKIPPED/NO_EXTRACTABLE_TEXT HWP **≥1건** 존재.
+
+**참고:** 서비스 계층 검증(§5)으로 skipped-baseline이 이미 **COMPLETED**이면 only 모드 dry_run `target_count=0` — HTTP SKIPPED→COMPLETED 재현을 위해 검증용 HWP 1건을 `hwp5txt_only`로 SKIPPED 만든 뒤 only 모드로 재처리하는 **별도 lab 절차**가 필요할 수 있음(운영 데이터 일괄 변경 금지).
+
+### 12.4 HTTP E2E 결과 (2026-05-21, only 모드)
+
+**준비:** compose dev DB에서 검증용 **skipped-baseline**(`9f69bb54-...`)만 `SKIPPED`/`NO_EXTRACTABLE_TEXT`로 fixture 복원 (`tools/hwp_poc/hwp_skipped_fixture_reset.py`, 운영 DB 아님).
+
+| 단계 | 결과 |
+|------|------|
+| login | ok |
+| dry_run `target_count` | **1** |
+| 첫 대상 `planned_action` | **REPROCESS_HWP_NO_EXTRACTABLE_TEXT_ONLY** |
+| `analysis_status_before` | **SKIPPED** |
+| `analysis_error_code_before` | **NO_EXTRACTABLE_TEXT** |
+| `target_file_id` | `9f69bb54-b4a2-4c2e-914b-d95cc76bf3f4` |
+| Job | **COMPLETED**, completed **1**, failed **0** |
+| post dry_run `target_count` | **0** (재처리 후 only 대상 없음) |
+| chunk | created **43**, failed **0** (DS HWP 일괄 chunk Job) |
+| embedding | **43** embedded |
+| search `"관리번호"` | **5**건, `overall_ok` |
+| preview | ok, `char_count` **2272**, lines **162–189** |
+| answer | ok, citations **5**, HWP citations **5**, `has_answer_text` true |
+| **`overall_ok`** | **true** |
+
+**판정:** PENDING backlog와 무관하게 **SKIPPED HWP 1건**이 HTTP Job으로 **COMPLETED** 전환되고, preview/answer까지 성공.
+
+**참고:** search 1위 `file_id`가 다른 HWP일 수 있음(`hit_target_file_id=false`) — 키워드·스코어 순위이며, 재처리·인덱싱 자체는 post dry_run·Job 지표로 확인.
+
+### 12.5 관리자 UI 연결 (2026-05-21)
+
+| 항목 | 내용 |
+|------|------|
+| 위치 | 저장소 **검색 반영** → `PipelineRunModal` Step 3 → `DocumentProcessingPanel` 하단 **「추출되지 않은 HWP 다시 처리」** (`CollapsiblePanel`, 기본 접힘) |
+| 대상 확인 | `dry_run=true`, `only_reprocess_hwp_no_extractable_text=true`, `include_extensions=hwp` |
+| 실행 | `POST /api/admin/jobs/process-pending-documents` (only 모드, worker). **전체 검색 반영·일반 문서 Job에는 only 옵션 미전달** |
+| 후속 | chunk/embedding **자동 연결 없음** — UI에서 검색 단위·인덱스 생성 안내 |
+| 브라우저 E2E | HTTP API E2E(§12.4)와 동일 — UI 수동 절차는 [`docs/로컬_실행_명령.md`](../로컬_실행_명령.md) § 관리자 UI 참고 |
 
 ---
 
-## 13. 관련 문서
+## 14. 후속 TODO
+
+| 우선순위 | 항목 |
+|----------|------|
+| P2 | `AdminJobsEnqueuePanel` 문서 처리 폼에 only 모드 UI 공통화(선택) |
+| P2 | COMPLETED HWP 재추출·기존 chunk 교체 정책 (별도 단계) |
+
+---
+
+## 15. 관련 문서
 
 - tiered E2E: [`hwp_tiered_parser_e2e_검증결과.md`](./hwp_tiered_parser_e2e_검증결과.md)
 - 정책: [`hwp_처리방식_검토.md`](./hwp_처리방식_검토.md) § 명시적 재처리

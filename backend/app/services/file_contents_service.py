@@ -81,6 +81,28 @@ _FETCH_PENDING_DOCUMENTS_SQL = """
     LIMIT %s
 """
 
+_FETCH_ONLY_HWP_NO_EXTRACTABLE_TEXT_SQL = """
+    SELECT
+        id,
+        remote_path,
+        filename,
+        extension,
+        size_bytes,
+        content_hash,
+        analysis_status::text AS analysis_status,
+        analysis_error_code
+    FROM files
+    WHERE data_source_id = %s
+      AND is_directory = FALSE
+      AND remote_path IS NOT NULL
+      AND analysis_status IS DISTINCT FROM 'DELETED'::analysis_status
+      AND lower(nullif(trim(extension), '')) = 'hwp'
+      AND analysis_status = 'SKIPPED'::analysis_status
+      AND analysis_error_code = 'NO_EXTRACTABLE_TEXT'
+    ORDER BY updated_at ASC NULLS FIRST, remote_path ASC
+    LIMIT %s
+"""
+
 
 UPSERT_FILE_CONTENT_SQL = """
 INSERT INTO file_contents (
@@ -190,6 +212,7 @@ def fetch_pending_document_files(
     document_extensions: frozenset[str],
     reprocess_skipped: bool,
     reprocess_hwp_no_extractable_text: bool = False,
+    only_reprocess_hwp_no_extractable_text: bool = False,
 ) -> list[dict[str, Any]]:
     """Return PENDING (and optionally SKIPPED reprocess) document rows.
 
@@ -197,24 +220,33 @@ def fetch_pending_document_files(
     (typically ``supported_document_extensions()`` intersected with the
     caller's ``include_extensions`` filter).
 
-    When ``reprocess_hwp_no_extractable_text`` is true, only ``hwp`` rows with
-    ``SKIPPED`` / ``NO_EXTRACTABLE_TEXT`` are added (still requires ``hwp`` in
-    ``document_extensions``).
+    When ``only_reprocess_hwp_no_extractable_text`` is true, **only** ``hwp``
+    rows with ``SKIPPED`` / ``NO_EXTRACTABLE_TEXT`` are returned (no PENDING).
+
+    When ``reprocess_hwp_no_extractable_text`` is true (and not only mode),
+    those rows are OR'd with PENDING / other reprocess branches.
     """
-    if not document_extensions:
-        return []
-    exts = sorted(document_extensions)
-    params: list[Any] = [
-        ds_id,
-        exts,
-        bool(reprocess_skipped),
-        bool(reprocess_hwp_no_extractable_text),
-        int(limit),
-    ]
+    if only_reprocess_hwp_no_extractable_text:
+        if not document_extensions or "hwp" not in document_extensions:
+            return []
+        params: list[Any] = [ds_id, int(limit)]
+        sql = _FETCH_ONLY_HWP_NO_EXTRACTABLE_TEXT_SQL
+    else:
+        if not document_extensions:
+            return []
+        exts = sorted(document_extensions)
+        params = [
+            ds_id,
+            exts,
+            bool(reprocess_skipped),
+            bool(reprocess_hwp_no_extractable_text),
+            int(limit),
+        ]
+        sql = _FETCH_PENDING_DOCUMENTS_SQL
     with get_db_connection() as conn:
         conn.row_factory = dict_row
         with conn.cursor() as cur:
-            cur.execute(_FETCH_PENDING_DOCUMENTS_SQL, params)
+            cur.execute(sql, params)
             rows = cur.fetchall()
     return [dict(r) for r in rows]
 

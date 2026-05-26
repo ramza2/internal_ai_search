@@ -196,6 +196,7 @@ class AdminProcessPendingDocumentsJobRequest(BaseModel):
     include_extensions: str | None = Field(default=None, max_length=2000)
     reprocess_skipped: bool = False
     reprocess_hwp_no_extractable_text: bool = False
+    only_reprocess_hwp_no_extractable_text: bool = False
     priority: int = 0
 
     @field_validator("include_extensions", mode="before")

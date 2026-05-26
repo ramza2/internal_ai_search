@@ -159,6 +159,8 @@ export type AdminProcessPendingDocumentsJobRequest = {
   max_file_size_bytes?: number;
   include_extensions?: string | null;
   reprocess_skipped?: boolean;
+  reprocess_hwp_no_extractable_text?: boolean;
+  only_reprocess_hwp_no_extractable_text?: boolean;
   priority?: number;
 };
 

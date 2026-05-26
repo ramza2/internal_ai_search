@@ -22,6 +22,7 @@ import type {
 import { SERVER_MAX_FILE_BYTES } from "@/constants/pipelineLimits";
 import { formatInt } from "@/utils/format";
 import styles from "../DocumentProcessModal.module.css";
+import { HwpSkippedReprocessSection } from "./HwpSkippedReprocessSection";
 
 const LIMIT_OPTIONS = [10, 20, 50, 100, 500] as const;
 
@@ -472,6 +473,15 @@ export function DocumentProcessingPanel({
           </SectionCard>
         </div>
       )}
+
+      <div className={styles.sectionSpacer}>
+        <HwpSkippedReprocessSection
+          dataSourceId={dataSourceId}
+          dataSourceName={dataSourceName}
+          maxFileSizeBytes={maxBytes}
+          disabled={disableRunButtons}
+        />
+      </div>
 
       {!suppressDocumentRealRun && (
         <ConfirmDialog

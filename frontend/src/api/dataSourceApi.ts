@@ -125,6 +125,12 @@ function buildDocumentProcessParams(p: DocumentProcessRequestParams): Record<str
   if (p.include_extensions && p.include_extensions.trim() !== "") {
     out.include_extensions = p.include_extensions.trim();
   }
+  if (p.reprocess_hwp_no_extractable_text) {
+    out.reprocess_hwp_no_extractable_text = true;
+  }
+  if (p.only_reprocess_hwp_no_extractable_text) {
+    out.only_reprocess_hwp_no_extractable_text = true;
+  }
   return out;
 }
 

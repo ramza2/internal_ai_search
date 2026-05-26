@@ -193,6 +193,11 @@ docker compose --env-file backend/.env -f docker-compose.dev.yml up -d frontend
 - **HWP Automation/COM 미사용.** HWPX는 ZIP/XML, HWP는 Linux/headless `hwp5txt` 변환. 검색 근거는 **변환 텍스트 기준 줄 번호**(원본 HWP 페이지 아님). 서버에 pyhwp/hwp5txt 설치 및 **AGPL 법무 검토** 필요. OCR 없음.
 - **dry_run:** 「대상 확인」으로 `dry_run=true` 호출 — 다운로드·DB 반영 없이 대상만 확인.
 - **reprocess_skipped:** 기존 `UNSUPPORTED_EXTENSION`으로 스킵된 지원 확장자 파일을 다시 처리할 때 사용.
+- **추출되지 않은 HWP 다시 처리** (Step 3 하단 접이식 영역, `HwpSkippedReprocessSection`):
+  - **대상:** 이전에 내용 추출이 되지 않아 제외된 **HWP만** (일반 대기 문서·이미 완료된 문서 제외). **전체 검색 반영·일반 문서 처리 Job에는 자동 포함되지 않습니다.**
+  - **재처리 대상 확인:** `POST .../process-pending-documents?dry_run=true` + only 모드 — **DB 변경 없음**, 대상 수·목록만 표시.
+  - **백그라운드 재처리 작업 등록:** `POST /api/admin/jobs/process-pending-documents` (`PROCESS_PENDING_DOCUMENTS`, worker 필요). 동기 「문서 처리 실행」은 제공하지 않습니다.
+  - **완료 후:** 파일 내용은 다시 추출되지만, 검색/RAG 반영을 위해 **검색 단위 생성**·**검색 인덱스 생성**을 별도로 실행해야 할 수 있습니다. 작업 이력은 **`/admin/jobs`** 에서 확인합니다.
 - **백그라운드 실행** 모드에서는 동기 「문서 처리 실행」 버튼을 숨기고, 같은 폼으로 **문서 처리 Job 생성**(`POST /api/admin/jobs/process-pending-documents`)만 제공합니다. 실제 추출 후 검색/RAG에는 **Chunk 생성**과 **Embedding**이 필요합니다.
 
 ## 인덱싱 파이프라인 실행 UI (`/admin/data-sources`)

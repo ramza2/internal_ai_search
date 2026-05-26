@@ -205,6 +205,9 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
         reprocess_hwp_no_extractable_text = bool(
             p.get("reprocess_hwp_no_extractable_text", False)
         )
+        only_reprocess_hwp_no_extractable_text = bool(
+            p.get("only_reprocess_hwp_no_extractable_text", False)
+        )
         wid = (settings.worker_id or "local-worker-1").strip()[:100]
 
         core = run_process_pending_documents_core(
@@ -215,6 +218,7 @@ def run_job(job: WorkerJob) -> WorkerRunResult:
             include_extensions=inc_raw,
             reprocess_skipped=reprocess_skipped,
             reprocess_hwp_no_extractable_text=reprocess_hwp_no_extractable_text,
+            only_reprocess_hwp_no_extractable_text=only_reprocess_hwp_no_extractable_text,
             scan_job_id=job.id,
             requested_by=job.requested_by,
             cancel_check=lambda: scan_jobs_service.is_cancel_requested(job.id),

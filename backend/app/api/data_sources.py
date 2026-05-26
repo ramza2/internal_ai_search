@@ -502,6 +502,7 @@ def process_data_source_pending_documents(
     dry_run: Annotated[bool, Query()] = False,
     reprocess_skipped: Annotated[bool, Query()] = False,
     reprocess_hwp_no_extractable_text: Annotated[bool, Query()] = False,
+    only_reprocess_hwp_no_extractable_text: Annotated[bool, Query()] = False,
 ) -> JSONResponse:
     """Download PENDING (or SKIPPED/UNSUPPORTED) document files into ``file_contents``.
 
@@ -513,8 +514,11 @@ def process_data_source_pending_documents(
     ``reprocess_skipped`` — SKIPPED / UNSUPPORTED_EXTENSION rows whose extension
     is now supported.
 
-    ``reprocess_hwp_no_extractable_text`` — only ``hwp`` rows with SKIPPED /
-    NO_EXTRACTABLE_TEXT (tiered re-extraction; does not affect COMPLETED HWP).
+    ``reprocess_hwp_no_extractable_text`` — PENDING plus SKIPPED HWP /
+    NO_EXTRACTABLE_TEXT reprocess targets.
+
+    ``only_reprocess_hwp_no_extractable_text`` — **only** SKIPPED HWP /
+    NO_EXTRACTABLE_TEXT (excludes PENDING backlog).
     """
     try:
         ext_set = parse_include_extensions(include_extensions)
@@ -527,6 +531,7 @@ def process_data_source_pending_documents(
             dry_run=dry_run,
             reprocess_skipped=reprocess_skipped,
             reprocess_hwp_no_extractable_text=reprocess_hwp_no_extractable_text,
+            only_reprocess_hwp_no_extractable_text=only_reprocess_hwp_no_extractable_text,
             requested_by=admin.id,
         )
         body = payload if isinstance(payload, dict) else None
@@ -535,6 +540,7 @@ def process_data_source_pending_documents(
             "dry_run": dry_run,
             "reprocess_skipped": reprocess_skipped,
             "reprocess_hwp_no_extractable_text": reprocess_hwp_no_extractable_text,
+            "only_reprocess_hwp_no_extractable_text": only_reprocess_hwp_no_extractable_text,
             "include_extensions": (
                 ",".join(sorted(ext_set)) if ext_set else None
             ),
