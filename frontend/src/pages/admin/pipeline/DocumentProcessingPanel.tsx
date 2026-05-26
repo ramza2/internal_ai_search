@@ -165,7 +165,7 @@ export function DocumentProcessingPanel({
   }, [limit, maxBytes, extSelected, reprocessSkipped, buildIncludeExtensions, onDocumentParamsSnapshot]);
 
   const resetForm = useCallback(() => {
-    setLimit(50);
+    setLimit(0);
     setMaxBytes(defaultMaxFileBytes);
     const o = {} as Record<DocExtKey, boolean>;
     for (const k of DOC_EXT_KEYS) o[k] = true;
