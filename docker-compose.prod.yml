@@ -52,7 +52,7 @@ services:
     environment:
       DB_HOST: db
       DB_PORT: "5432"
-      OLLAMA_BASE_URL: http://192.168.10.154:11434
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "owncloud.openlink.kr:host-gateway"
@@ -73,7 +73,7 @@ services:
     environment:
       DB_HOST: db
       DB_PORT: "5432"
-      OLLAMA_BASE_URL: http://192.168.10.154:11434
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
       WORKER_ENABLED: "true"
     extra_hosts:
       - "host.docker.internal:host-gateway"
