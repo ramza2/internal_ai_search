@@ -29,6 +29,7 @@ import {
   type ScanScope,
 } from "@/constants/pipelineLimits";
 import type { AdminPipelineJobRequest } from "@/types/adminJobs";
+import { PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS } from "@/types/adminJobs";
 import type { FileStatsResponse } from "@/types/file";
 import type {
   PipelineAutoStepKey,
@@ -199,9 +200,23 @@ export function PipelineRunModal({ dataSource, onClose, onRefresh }: Props) {
     partialWarnings: string[];
   } | null>(null);
 
-  const docParamsRef = useRef<DocumentPipelineFormSnapshot | null>(null);
+  const defaultDocPipelineParams = useCallback(
+    (): DocumentPipelineFormSnapshot => ({
+      limit: 0,
+      max_file_size_bytes: SERVER_MAX_FILE_BYTES,
+      include_extensions: PROCESS_PENDING_DOCUMENTS_DEFAULT_EXTENSIONS,
+      reprocess_skipped: false,
+    }),
+    []
+  );
+
+  const docParamsRef = useRef<DocumentPipelineFormSnapshot | null>(defaultDocPipelineParams());
   const onRefreshRef = useRef(onRefresh);
   onRefreshRef.current = onRefresh;
+
+  useEffect(() => {
+    docParamsRef.current = defaultDocPipelineParams();
+  }, [dataSource.id, defaultDocPipelineParams]);
 
   const patchSnap = useCallback((id: StepId, partial: Partial<StepSnap>) => {
     setSnap((prev) => ({ ...prev, [id]: { ...prev[id], ...partial } }));
